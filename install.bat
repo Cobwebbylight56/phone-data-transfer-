@@ -82,13 +82,56 @@ echo  Creating launchers ...
 >> "Phone Data Transfer.bat" echo cd /d "%%~dp0"
 >> "Phone Data Transfer.bat" echo start "" ".venv\Scripts\pythonw.exe" -m ptransfer_gui.app
 
+REM pythonw shows no window at all, so a GUI that fails to start looks like
+REM nothing happening. This one keeps the console and the error message.
+> "Phone Data Transfer (show errors).bat" echo @echo off
+>> "Phone Data Transfer (show errors).bat" echo cd /d "%%~dp0"
+>> "Phone Data Transfer (show errors).bat" echo ".venv\Scripts\python.exe" -m ptransfer_gui.app
+>> "Phone Data Transfer (show errors).bat" echo echo.
+>> "Phone Data Transfer (show errors).bat" echo pause
+
 > "ptransfer.bat" echo @echo off
 >> "ptransfer.bat" echo cd /d "%%~dp0"
 >> "ptransfer.bat" echo ".venv\Scripts\python.exe" -m ptransfer.cli %%*
 
-powershell -NoProfile -Command ^
-  "$s=(New-Object -COM WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\Phone Data Transfer.lnk');" ^
-  "$s.TargetPath='%CD%\Phone Data Transfer.bat';$s.WorkingDirectory='%CD%';$s.Save()" >nul 2>&1
+REM Confirm the window will actually open, rather than finding out later.
+"%VENV_PY%" -c "import PySide6" 2>nul
+if errorlevel 1 (
+    echo.
+    echo  NOTE: PySide6 did not install, so the window will not open.
+    echo  This usually means your Python version is too new for it yet.
+    echo  Everything still works from the command line:
+    echo      ptransfer.bat devices
+    echo      ptransfer.bat nokia --fix-bootloop
+    echo.
+)
+
+REM Build the shortcut from a real script file rather than a multi-line
+REM inline command - the line continuations were fragile, and hiding the
+REM output meant a failure looked like success.
+echo.
+echo  Creating a Desktop shortcut ...
+set "SHORTCUT_PS=%TEMP%\ptransfer-shortcut.ps1"
+> "%SHORTCUT_PS%" echo $ErrorActionPreference = 'Stop'
+>> "%SHORTCUT_PS%" echo $desktop = [Environment]::GetFolderPath('Desktop')
+>> "%SHORTCUT_PS%" echo if (-not $desktop) { $desktop = Join-Path $env:USERPROFILE 'Desktop' }
+>> "%SHORTCUT_PS%" echo $linkPath = Join-Path $desktop 'Phone Data Transfer.lnk'
+>> "%SHORTCUT_PS%" echo $shell = New-Object -ComObject WScript.Shell
+>> "%SHORTCUT_PS%" echo $link = $shell.CreateShortcut($linkPath)
+>> "%SHORTCUT_PS%" echo $link.TargetPath = '%CD%\Phone Data Transfer.bat'
+>> "%SHORTCUT_PS%" echo $link.WorkingDirectory = '%CD%'
+>> "%SHORTCUT_PS%" echo $link.Description = 'Copy data off a phone, and rescue one that will not boot'
+>> "%SHORTCUT_PS%" echo $link.Save()
+>> "%SHORTCUT_PS%" echo Write-Host ('  created: ' + $linkPath)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SHORTCUT_PS%"
+if errorlevel 1 (
+    echo.
+    echo  Could not create the Desktop shortcut - everything else is fine.
+    echo  Start the app with "Phone Data Transfer.bat" in this folder, or
+    echo  right-click it and choose Send to ^> Desktop ^(create shortcut^).
+)
+del "%SHORTCUT_PS%" >nul 2>&1
 
 echo.
 echo  ==============================================================
