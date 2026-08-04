@@ -6,10 +6,29 @@ import sys
 
 from ptransfer.logging_setup import setup_logging
 
+MISSING_QT = """
+Phone Data Transfer needs PySide6 for its window, and it is not installed.
+
+Install it with:
+
+    python -m pip install PySide6
+
+Or re-run install.bat, which does it for you.
+
+You do not need it for the command line - 'ptransfer devices', 'ptransfer backup'
+and 'ptransfer nokia --fix-bootloop' all work without a window.
+"""
+
 
 def run() -> int:
     setup_logging()
-    from PySide6.QtWidgets import QApplication
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ImportError:
+        # Someone double-clicking a shortcut should get a sentence, not a
+        # traceback about a module they have never heard of.
+        print(MISSING_QT, file=sys.stderr)
+        return 2
 
     from .main_window import MainWindow
 

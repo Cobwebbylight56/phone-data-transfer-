@@ -99,3 +99,25 @@ def test_missing_tools_exits_with_guidance(monkeypatch, capsys):
     monkeypatch.setattr(cli, "DeviceManager", lambda *a, **k: DeviceManager(Tools("", ""), FakePhone()))
     assert cli.main(["devices"]) == 2
     assert "ptransfer setup" in capsys.readouterr().out
+
+
+def test_gui_entry_point_explains_a_missing_pyside(monkeypatch, capsys):
+    """Double-clicking the shortcut must not produce a raw traceback."""
+    import builtins
+
+    import ptransfer_gui.app as app_mod
+
+    real_import = builtins.__import__
+
+    def no_pyside(name, *args, **kwargs):
+        if name.startswith("PySide6"):
+            raise ImportError("No module named 'PySide6'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pyside)
+    code = app_mod.run()
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "pip install PySide6" in err
+    assert "command line" in err  # tells them what still works

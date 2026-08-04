@@ -159,31 +159,74 @@ Run `ptransfer guide sony`.
 
 ---
 
-## Installing
+## Installing on Windows
 
-### The easy way
+Pick **one** of these. Option A needs nothing installed; option B is fastest if you already
+have Python.
 
-Download the release, unzip it, run `PhoneDataTransfer.exe`. On first launch it offers to
-fetch Google's `adb`/`fastboot` (~15 MB) automatically.
+### A. Download the built app (no Python needed)
 
-### From source
+Every push builds a Windows `.exe` automatically.
+
+1. Go to the repo on GitHub → **Actions** tab
+2. Click the newest **build-windows** run (green tick = finished)
+3. Scroll to **Artifacts** at the bottom and download **PhoneDataTransfer-windows**
+4. Unzip it anywhere — Desktop is fine
+5. Double-click **PhoneDataTransfer.exe**
+
+`adb` and `fastboot` are already inside that folder, so there is nothing else to install.
+
+Windows will likely show a blue **"Windows protected your PC"** box, because the build isn't
+code-signed (signing certificates cost money). Click **More info** → **Run anyway**. If you'd
+rather not, use option B, which builds it on your own machine from source you can read.
+
+### B. Install from source (one click)
+
+1. Install Python 3.10+ if you don't have it — in PowerShell:
+   `winget install Python.Python.3.12`
+   (or from [python.org](https://www.python.org/downloads/) — tick **Add python.exe to PATH**)
+2. Download this repo: green **Code** button → **Download ZIP** → unzip it
+   (or `git clone` it if you have git)
+3. Double-click **`install.bat`**
+
+It creates a private `.venv` folder, installs everything, downloads `adb`/`fastboot`, and puts
+a **Phone Data Transfer** shortcut on your Desktop. Nothing is scattered around your system —
+deleting the folder removes it completely.
+
+Then use either:
+
+- **`Phone Data Transfer.bat`** (or the Desktop shortcut) for the window
+- **`ptransfer.bat`** for the command line, e.g. `ptransfer.bat nokia --fix-bootloop`
+
+### C. Manual, if you prefer to see each step
 
 ```powershell
-git clone <this repo>
+git clone https://github.com/Cobwebbylight56/phone-data-transfer-.git
 cd phone-data-transfer-
-python -m pip install -e ".[gui]"
-ptransfer gui
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[gui]"
+ptransfer setup      # fetches adb + fastboot
+ptransfer gui        # or: ptransfer devices
 ```
 
-Python 3.10+. The core library has **no dependencies** — PySide6 is only for the window.
+Python 3.10+. The core library has **no dependencies** — PySide6 is only needed for the
+window, and every command works without it.
 
-### Building the .exe
+### Building the .exe yourself
 
 ```powershell
-.\build_windows.ps1
+.\build_windows.ps1              # add -WithTools to bundle adb/fastboot inside
 ```
 
 Output lands in `dist\PhoneDataTransfer\`.
+
+### Checking it works
+
+```powershell
+ptransfer devices       # should list your phone, or explain why not
+ptransfer guide nokia   # works with no phone attached
+```
 
 ---
 
