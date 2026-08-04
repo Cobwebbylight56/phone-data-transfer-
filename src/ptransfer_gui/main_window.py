@@ -382,6 +382,12 @@ class MainWindow(QMainWindow):
                 outcome = rescue.switch_slot(device)
                 text = f"{outcome.status}: {outcome.message}"
                 return text + (f"\n  {outcome.detail}" if outcome.detail else "")
+            if action == "fix-bootloop":
+                session = rescue.repair_boot_loop(device, workdir=Path.home())
+                return session.as_text()
+            if action == "undo-slot":
+                outcome = rescue.undo_slot_switch(device)
+                return f"{outcome.status}: {outcome.message}\n  {outcome.detail}"
             if action == "find-ota":
                 packages = rescue.find_ota_packages(device)
                 if not packages:
@@ -392,7 +398,7 @@ class MainWindow(QMainWindow):
 
         def done(text: str) -> None:
             self.rescue_page.append(text)
-            if action in ("guided", "switch-slot"):
+            if action in ("guided", "switch-slot", "fix-bootloop", "undo-slot"):
                 QMessageBox.information(self, "Nokia rescue", text[:2000])
 
         self._run(work, done, page=self.rescue_page)

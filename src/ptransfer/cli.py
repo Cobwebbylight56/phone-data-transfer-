@@ -139,6 +139,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="boot from the other system slot (data-safe, writes nothing)")
     n.add_argument("--logs", action="store_true", help="dump the full recovery log")
     n.add_argument("--apply-ota", action="store_true", help="use an update package already on the phone")
+    n.add_argument("--fix-bootloop", action="store_true",
+                   help="undo the update, or finish it, and check whether the phone boots")
+    n.add_argument("--strategy", choices=["auto", "revert", "update", "both"], default="auto",
+                   help="auto (default) reverts first, then tries finishing the update")
+    n.add_argument("--ota", metavar="ZIP", default="", help="update package to use with --strategy update")
+    n.add_argument("--timeout", type=float, default=240.0, help="seconds to wait for a boot (default 240)")
+    n.add_argument("--undo-slot", action="store_true", help="put the active slot back after a switch")
+    n.add_argument("--no-rollback", action="store_true",
+                   help="leave the new slot active even if it did not boot")
     n.add_argument("--workdir", default=".", help="where to save pulled packages")
     n.add_argument("--report", metavar="FILE", help="write the full report to a file")
 
@@ -447,6 +456,28 @@ def cmd_nokia(args, manager: DeviceManager) -> int:
     device = _select_nokia(devices)
     if device is None:
         return 1
+
+    if args.undo_slot:
+        outcome = rescue.undo_slot_switch(device)
+        _line(f"{outcome.status}: {outcome.message}")
+        if outcome.detail:
+            _line(f"  {outcome.detail}")
+        return 0 if outcome.helped else 1
+
+    if args.fix_bootloop:
+        _line("Trying to get the phone booting again. Nothing here erases anything.")
+        _line("Leave the cable connected - this takes a few minutes per attempt.")
+        _line("")
+        session = rescue.repair_boot_loop(
+            device,
+            strategy=args.strategy,
+            zip_path=args.ota,
+            workdir=Path(args.workdir),
+            timeout=args.timeout,
+        )
+        _line("")
+        _line(session.as_text())
+        return 0 if session.fixed else 1
 
     # A single action was asked for.
     if args.switch_slot is not None:

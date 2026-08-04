@@ -19,7 +19,7 @@ ptransfer/               the engine - pure stdlib, no Qt, importable and testabl
     backup.py            phone  -> bundle
     restore.py           bundle -> phone
     recovery.py          diagnosis + rescue actions
-    nokia.py             Nokia rescue: A/B slots, recovery-log analysis, on-device OTA
+    nokia.py             Nokia rescue: A/B slots, log analysis, on-device OTA, boot-loop repair
     screen.py            screen capture + remote input (tap/swipe/type/unlock)
     menu.py              the stock recovery menu, annotated with what each option costs
     oem/                 per-brand knowledge (nokia, sony, generic)
@@ -85,12 +85,26 @@ verification pass, and `test_missing_files_are_reported_as_partial` proves the p
 making a file genuinely unpullable rather than mocking the outcome.
 
 ```bash
-python -m pytest            # 180 tests, no hardware, no display
+python -m pytest            # 201 tests, no hardware, no display
 ```
 
 GUI tests run under `QT_QPA_PLATFORM=offscreen` and skip if PySide6 is absent. They build real
 widgets and assert on rendered output — which is how the `<file.zip>` escaping bug was caught:
 Qt's rich text was swallowing the filename as an unknown tag.
+
+## Reporting a repair honestly
+
+`repair_boot_loop` runs two experiments and has to distinguish three outcomes, not two: it
+worked, it did not work, and *it could not be tried*. An option skipped because the phone was
+in the wrong mode is not evidence against it, and reporting it as failure would push someone
+toward a factory reset with a repair still untried — so `_advice_after_failure` separates
+`performed` from `skipped` and says which is which. There is a fourth case too: adb cannot see
+a booted phone when USB debugging was never enabled, so `wait_for_boot` returns `None` rather
+than `False` and says to look at the handset.
+
+Anything reversible is recorded before it happens. The slot switch writes the original slot to
+the user data directory, so `--undo-slot` works in a later session — the phone may not come
+back for hours, and by then the terminal that made the change is long gone.
 
 ## Two things the screen code has to get right
 

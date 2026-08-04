@@ -31,17 +31,21 @@ formats, erases, or unlocks anything.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shlex
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .adb import Adb
 from .devices import Device, DeviceManager, State
 from .fastboot import SlotInfo
+from .platform_tools import user_data_dir
 from .proc import Cancel, ToolError
 from .progress import Reporter
+from .usb import enumerate_usb
 
 log = logging.getLogger(__name__)
 
@@ -242,6 +246,60 @@ class StepOutcome:
     @property
     def helped(self) -> bool:
         return self.status == "ok"
+
+
+@dataclass
+class BootWatch:
+    """What happened after we told the phone to restart."""
+
+    booted: bool | None       # None = could not tell from here
+    seconds: float = 0.0
+    disappearances: int = 0   # a phone that keeps vanishing is still looping
+    detail: str = ""
+
+    @property
+    def looping(self) -> bool:
+        return self.booted is False and self.disappearances >= 2
+
+
+@dataclass
+class RepairAttempt:
+    name: str
+    performed: bool
+    booted: bool | None
+    message: str
+    detail: str = ""
+    rolled_back: bool = False
+
+    @property
+    def fixed_it(self) -> bool:
+        return self.performed and self.booted is True
+
+
+@dataclass
+class RepairSession:
+    attempts: list[RepairAttempt] = field(default_factory=list)
+    advice: str = ""
+
+    @property
+    def fixed(self) -> bool:
+        return any(a.fixed_it for a in self.attempts)
+
+    def as_text(self) -> str:
+        out = ["Boot loop repair", "=" * 16, ""]
+        for a in self.attempts:
+            verdict = {True: "FIXED IT", False: "did not help", None: "could not tell"}[a.booted]
+            head = f"  {a.name}: " + ("skipped" if not a.performed else verdict)
+            out.append(head)
+            out.append(f"      {a.message}")
+            if a.detail:
+                out.append(f"      {a.detail}")
+            if a.rolled_back:
+                out.append("      The change was put back the way it was.")
+            out.append("")
+        if self.advice:
+            out.append(self.advice)
+        return "\n".join(out)
 
 
 @dataclass
@@ -479,6 +537,332 @@ class NokiaRescue:
             f"ptransfer rescue --sideload {local}",
         )
 
+    # --- did it actually come back? ---------------------------------------
+    def wait_for_boot(self, serial: str | None = None, timeout: float = 240.0) -> BootWatch:
+        """Watch until Android finishes booting, or until we give up.
+
+        A boot loop and a phone that is simply slow look the same for the first
+        minute. What tells them apart is the phone appearing on USB and then
+        vanishing again, repeatedly - so that gets counted rather than guessed.
+        """
+        start = time.time()
+        was_present = False
+        disappearances = 0
+
+        while time.time() - start < timeout:
+            self.cancel.raise_if_cancelled()
+            elapsed = time.time() - start
+
+            try:
+                devices = self.manager.adb.devices()
+            except ToolError:
+                devices = []
+            mine = [d for d in devices if not serial or d.serial == serial]
+            present = bool(mine)
+
+            online = [d for d in mine if d.state == "device"]
+            if online:
+                completed = ""
+                try:
+                    completed = self.manager.adb.getprop("sys.boot_completed", serial).strip()
+                except ToolError:
+                    completed = ""
+                if completed == "1":
+                    return BootWatch(
+                        True,
+                        elapsed,
+                        disappearances,
+                        f"Android finished booting after {elapsed:.0f} seconds.",
+                    )
+
+            if was_present and not present:
+                disappearances += 1
+                self.report.status(f"The phone dropped off USB again ({disappearances} times so far)")
+            was_present = present
+
+            self.report.progress(
+                min(0.99, elapsed / timeout),
+                f"waiting for the phone to boot ({elapsed:.0f}s)",
+                throttle=1.0,
+            )
+            time.sleep(3)
+
+        elapsed = time.time() - start
+
+        # adb needs USB debugging authorised. If it was never on, a booted
+        # phone is invisible to adb but still visible as a USB device.
+        usb_hits = [d for d in enumerate_usb(self.manager.runner) if d.mode() is not None]
+        if not was_present and usb_hits:
+            return BootWatch(
+                None,
+                elapsed,
+                disappearances,
+                "The phone is on USB but adb cannot talk to it - most likely USB debugging was "
+                "never switched on. Look at the phone itself to see whether it booted.",
+            )
+
+        if disappearances >= 2:
+            return BootWatch(
+                False,
+                elapsed,
+                disappearances,
+                f"The phone appeared and vanished {disappearances} times in {elapsed:.0f} seconds - "
+                "it is still looping.",
+            )
+        return BootWatch(
+            False,
+            elapsed,
+            disappearances,
+            f"No sign of a completed boot after {elapsed:.0f} seconds.",
+        )
+
+    # --- experiment 1: undo the update ------------------------------------
+    def revert_update(
+        self,
+        device: Device,
+        timeout: float = 240.0,
+        roll_back_on_failure: bool = True,
+    ) -> RepairAttempt:
+        """Go back to the system that was working before the update.
+
+        On an A/B phone the previous system is still sitting in the other slot,
+        untouched. Switching to it *is* undoing the update - and it costs
+        nothing, because no partition is written and userdata is not involved.
+        """
+        name = "Revert to the previous system"
+        if device.state is not State.BOOTLOADER:
+            return RepairAttempt(
+                name,
+                False,
+                None,
+                "Needs the phone in fastboot.",
+                "Power off, hold Volume Down, then connect the USB cable and run this again.",
+            )
+
+        try:
+            info = self.manager.fastboot.slots(device.serial or None)
+        except ToolError as exc:
+            return RepairAttempt(name, False, None, f"Could not read the slots: {exc}")
+
+        if not info.is_ab:
+            return RepairAttempt(
+                name,
+                False,
+                None,
+                "This Nokia has one system slot, so there is no previous system to go back to.",
+            )
+
+        original, target = info.current, info.other
+        self.report.status(f"Switching from slot {original.upper()} back to slot {target.upper()}")
+        switch = self.switch_slot(device, target)
+        if not switch.helped:
+            return RepairAttempt(name, False, None, switch.message, switch.detail)
+
+        remember_slot_switch(device.serial, original, target)
+
+        self.report.status("Rebooting - this takes a couple of minutes, do not unplug it")
+        self.manager.fastboot.reboot("", device.serial or None)
+        watch = self.wait_for_boot(device.serial or None, timeout)
+
+        if watch.booted is True:
+            return RepairAttempt(
+                name,
+                True,
+                True,
+                f"It booted from slot {target.upper()}. The update was the problem.",
+                "Back up now, before anything else - then let the update reinstall itself properly.",
+            )
+
+        rolled_back = False
+        if roll_back_on_failure:
+            rolled_back = self._restore_slot_if_in_fastboot(device, original)
+
+        detail = ""
+        if not rolled_back:
+            detail = (
+                f"The phone is now set to boot slot {target.upper()}. To put it back, get it into "
+                f"fastboot and run 'ptransfer nokia --undo-slot'."
+            )
+        return RepairAttempt(name, True, watch.booted, watch.detail, detail, rolled_back)
+
+    # --- experiment 2: finish the update ----------------------------------
+    def finish_update(
+        self,
+        device: Device,
+        zip_path: str | Path = "",
+        workdir: Path | str = ".",
+        timeout: float = 240.0,
+    ) -> RepairAttempt:
+        """Complete the half-applied update instead of undoing it.
+
+        The other way a phone gets stuck: the update was interrupted partway,
+        so neither the old nor the new system is whole. Applying the package in
+        full rebuilds the system partitions and leaves userdata alone.
+        """
+        name = "Finish the interrupted update"
+        if device.state not in (State.RECOVERY, State.SIDELOAD):
+            return RepairAttempt(
+                name,
+                False,
+                None,
+                "Needs the phone in recovery.",
+                "Power off, hold Volume Up, then press and hold Power - then run this again.",
+            )
+
+        local = Path(zip_path) if zip_path else None
+        if local is None:
+            packages = self.find_ota_packages(device)
+            if not packages:
+                return RepairAttempt(
+                    name,
+                    False,
+                    None,
+                    "No update package to apply.",
+                    "Nothing was downloaded to the phone before it broke, and HMD does not "
+                    "publish these. If you have the right signed zip, pass it with --ota.",
+                )
+            staged = self.apply_ota_from_device(device, packages[0], Path(workdir))
+            if staged.status == "failed":
+                return RepairAttempt(name, False, None, staged.message, staged.detail)
+            local = Path(workdir) / Path(packages[0]).name
+
+        if not local.exists():
+            return RepairAttempt(name, False, None, f"{local} does not exist.")
+
+        serial = device.serial or None
+        if device.state is not State.SIDELOAD:
+            self.report.status("Putting the phone into sideload mode")
+            self.manager.adb.reboot("sideload", serial)
+            if not self._wait_for_state(serial, "sideload", 90):
+                return RepairAttempt(
+                    name,
+                    False,
+                    None,
+                    "The phone did not enter sideload mode by itself.",
+                    "On the phone, choose 'Apply update from ADB' with the volume keys and Power, "
+                    "then run this again.",
+                )
+
+        self.report.status(f"Applying {local.name} - do not unplug the phone")
+        res = self.manager.adb.sideload(
+            str(local), serial, on_line=lambda ln: self.report.status(ln.strip()[-90:]), cancel=self.cancel
+        )
+        if not res.ok:
+            return RepairAttempt(
+                name,
+                True,
+                None,
+                "The update was rejected.",
+                res.output.strip()[-300:] or "no output from the phone",
+            )
+
+        self.report.status("Update applied. Rebooting")
+        self.manager.adb.reboot("", serial)
+        watch = self.wait_for_boot(serial, timeout)
+        if watch.booted is True:
+            return RepairAttempt(
+                name,
+                True,
+                True,
+                "It booted after the update was applied in full.",
+                "Back up now, before anything else.",
+            )
+        return RepairAttempt(name, True, watch.booted, watch.detail)
+
+    # --- run both -----------------------------------------------------------
+    def repair_boot_loop(
+        self,
+        device: Device,
+        strategy: str = "auto",
+        zip_path: str | Path = "",
+        workdir: Path | str = ".",
+        timeout: float = 240.0,
+    ) -> RepairSession:
+        """Try undoing the update, then finishing it, and report which worked.
+
+        Reverting goes first on purpose: it writes nothing, takes two minutes,
+        and is trivially undone. Applying an update rewrites system partitions,
+        so it is the second thing to try, not the first.
+        """
+        session = RepairSession()
+        self.report.start_section("bootloop", "Trying to fix the boot loop")
+
+        if strategy in ("auto", "revert", "both"):
+            attempt = self.revert_update(device, timeout)
+            session.attempts.append(attempt)
+            if attempt.fixed_it:
+                session.advice = (
+                    "Fixed by going back to the previous system. Back the phone up now - then let "
+                    "the update download and install again, on a full battery and left alone."
+                )
+                return session
+
+        if strategy in ("auto", "update", "both"):
+            attempt = self.finish_update(device, zip_path, workdir, timeout)
+            session.attempts.append(attempt)
+            if attempt.fixed_it:
+                session.advice = "Fixed by applying the update in full. Back the phone up now."
+                return session
+
+        session.advice = _advice_after_failure(session.attempts)
+        return session
+
+    def _restore_slot_if_in_fastboot(self, device: Device, slot: str) -> bool:
+        """Put the slot back, if the phone happens to be reachable again."""
+        try:
+            devices = self.manager.fastboot.devices()
+        except ToolError:
+            return False
+        if not devices:
+            return False
+        serial = device.serial or devices[0].serial or None
+        res = self.manager.fastboot.set_active(slot, serial)
+        if res.ok:
+            self.report.status(f"Put the active slot back to {slot.upper()}")
+            clear_slot_switch()
+            return True
+        return False
+
+    def undo_slot_switch(self, device: Device) -> StepOutcome:
+        """Undo the last slot switch, even in a later session."""
+        record = last_slot_switch()
+        if record is None:
+            return StepOutcome("undo slot switch", "skipped", "No slot switch to undo.")
+        if device.state is not State.BOOTLOADER:
+            return StepOutcome(
+                "undo slot switch",
+                "skipped",
+                "Needs the phone in fastboot.",
+                "Power off, hold Volume Down, then connect USB.",
+            )
+        original = record.get("from", "")
+        if original not in ("a", "b"):
+            return StepOutcome("undo slot switch", "failed", "The saved record is unusable.")
+        res = self.manager.fastboot.set_active(original, device.serial or None)
+        if not res.ok:
+            return StepOutcome("undo slot switch", "failed", res.output.strip()[:200])
+        clear_slot_switch()
+        return StepOutcome(
+            "undo slot switch",
+            "ok",
+            f"Active slot put back to {original.upper()}.",
+            "Nothing was erased either way.",
+        )
+
+    def _wait_for_state(self, serial: str | None, state: str, timeout: float) -> bool:
+        start = time.time()
+        while time.time() - start < timeout:
+            self.cancel.raise_if_cancelled()
+            try:
+                devices = self.manager.adb.devices()
+            except ToolError:
+                devices = []
+            for d in devices:
+                if (not serial or d.serial == serial) and d.state == state:
+                    return True
+            time.sleep(2)
+        return False
+
     # --- the guided run -------------------------------------------------
     def guided_rescue(self, device: Device, workdir: Path | str = ".") -> NokiaReport:
         """Work through every data-safe repair, in order, and report."""
@@ -579,6 +963,108 @@ class NokiaRescue:
             )
 
         return report
+
+
+MODE_FOR = {
+    "Revert to the previous system": "fastboot (power off, hold Volume Down, connect USB)",
+    "Finish the interrupted update": "recovery (power off, hold Volume Up, then press and hold Power)",
+}
+
+NEXT_STEPS = (
+    "Run 'ptransfer nokia --logs' with the phone in recovery - the crash log will say what is "
+    "actually failing, and that decides what comes next.\n"
+    "Do not factory reset yet. A phone that still reaches recovery or fastboot is usually "
+    "repairable with your data intact, and a reset ends that permanently."
+)
+
+
+def _advice_after_failure(attempts: list[RepairAttempt]) -> str:
+    """What to say when the phone still is not booting.
+
+    The distinction that matters: an option that *failed* is ruled out, an
+    option that was *skipped* because the phone was in the wrong mode has not
+    been tried at all - and saying otherwise would send someone to a factory
+    reset with a repair still on the table.
+    """
+    tried = [a for a in attempts if a.performed]
+    skipped = [a for a in attempts if not a.performed]
+
+    if not tried:
+        lines = ["Neither repair could run yet - each needs the phone in a particular mode:"]
+        for a in attempts:
+            mode = MODE_FOR.get(a.name, "a different mode")
+            lines.append(f"  {a.name.lower()} - {mode}")
+        lines.append("Get it into one of those and run this again.")
+        return "\n".join(lines)
+
+    if any(a.booted is None for a in tried):
+        return (
+            "The repair ran, but this PC could not tell whether the phone booted - that usually "
+            "means USB debugging was never switched on. Look at the phone: if it is on the home "
+            "screen, it worked, and you should back it up straight away."
+        )
+
+    if skipped:
+        names = ", ".join(a.name.lower() for a in skipped)
+        lines = [
+            f"That did not fix it, but {names} has not been tried yet.",
+            "To try it, put the phone in "
+            + MODE_FOR.get(skipped[0].name, "the right mode")
+            + ", then run this again.",
+            "",
+            NEXT_STEPS,
+        ]
+        return "\n".join(lines)
+
+    return (
+        "Neither going back nor going forward got it booting, so the update is not what is "
+        "wrong.\n" + NEXT_STEPS
+    )
+
+
+# --- remembering what we changed -----------------------------------------
+# A slot switch is trivially reversible, but only if you can still find out
+# which slot it came from - and the phone may not come back for hours.
+SLOT_RECORD = "last-slot-switch.json"
+
+
+def _record_path() -> Path:
+    return user_data_dir() / SLOT_RECORD
+
+
+def remember_slot_switch(serial: str, from_slot: str, to_slot: str) -> None:
+    try:
+        _record_path().write_text(
+            json.dumps(
+                {
+                    "serial": serial,
+                    "from": from_slot,
+                    "to": to_slot,
+                    "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        log.warning("could not record the slot switch")
+
+
+def last_slot_switch() -> dict | None:
+    path = _record_path()
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def clear_slot_switch() -> None:
+    try:
+        _record_path().unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _typical_chipset(name: str) -> str:

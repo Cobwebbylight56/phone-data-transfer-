@@ -152,6 +152,21 @@ What the app recognises, and what each one means:
 | `no bootable slot`, `slot … is unbootable` | The bootloader gave up on the current slot | Switch slots — exactly the case it exists for |
 | `failed to setup keystore` | The phone can't unlock its own encryption | Hardest case; only a userdata-preserving reflash may help |
 
+### Let the app run the experiment: `ptransfer nokia --fix-bootloop`
+
+Undo the update, restart, and see if it boots. If not, roll the change back and try finishing
+the update instead. Each attempt reports whether the phone actually came back — it waits for
+`sys.boot_completed` rather than assuming.
+
+```
+ptransfer nokia --fix-bootloop                    # revert first, then the update
+ptransfer nokia --fix-bootloop --strategy revert  # only undo
+ptransfer nokia --undo-slot                       # put the slot back, any time later
+```
+
+Nothing here erases anything. The slot the phone started on is written to disk before the
+switch, so it can be undone in a later session even if the phone stays dark for hours.
+
 ### The slot switch — the highest-value repair
 
 Nearly every Nokia since the Android One line is an A/B device: two complete, independent

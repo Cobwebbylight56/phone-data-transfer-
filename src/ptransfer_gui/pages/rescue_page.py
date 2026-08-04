@@ -113,7 +113,23 @@ class RescuePage(QWidget):
         # Nokia gets its own panel: these actions do real work rather than
         # print advice, and they are the ones most likely to fix the phone.
         self.nokia_box = QGroupBox("Nokia — everything here is data-safe")
-        nokia_layout = QHBoxLayout(self.nokia_box)
+        nokia_outer = QVBoxLayout(self.nokia_box)
+
+        fix_row = QHBoxLayout()
+        self.fix_button = QPushButton("Fix the boot loop — undo the update, or finish it")
+        self.fix_button.setToolTip(
+            "Switches back to the system that was working before the update, restarts the phone "
+            "and checks whether it came back. If that does not help, it tries applying the update "
+            "in full instead. Neither writes to your data."
+        )
+        self.fix_button.clicked.connect(self._nokia_fix_bootloop)
+        fix_row.addWidget(self.fix_button, 1)
+        undo = QPushButton("Undo slot switch")
+        undo.clicked.connect(self._nokia_undo_slot)
+        fix_row.addWidget(undo)
+        nokia_outer.addLayout(fix_row)
+
+        nokia_layout = QHBoxLayout()
         for label, slot in (
             ("Guided rescue", self._nokia_guided),
             ("Read the phone's crash log", self._nokia_logs),
@@ -123,6 +139,8 @@ class RescuePage(QWidget):
             b = QPushButton(label)
             b.clicked.connect(slot)
             nokia_layout.addWidget(b)
+        nokia_outer.addLayout(nokia_layout)
+
         self.nokia_box.setVisible(False)
         layout.addWidget(self.nokia_box)
 
@@ -280,6 +298,12 @@ class RescuePage(QWidget):
 
     def _nokia_find_ota(self) -> None:
         self._nokia("find-ota")
+
+    def _nokia_fix_bootloop(self) -> None:
+        self._nokia("fix-bootloop")
+
+    def _nokia_undo_slot(self) -> None:
+        self._nokia("undo-slot")
 
     def on_event(self, e: Event) -> None:
         if e.message:

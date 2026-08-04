@@ -76,19 +76,43 @@ names the problem outright — "failed to mount /data", "dm-verity verification 
 it means and what to do. Almost nobody looks at this file; it is the most informative thing on
 a phone that will not start.
 
-**2. Checks the A/B system slots, and can switch them.** Nearly every Nokia since the Android
-One line carries two complete system slots. A failed update leaves the new slot unbootable
-while the previous, working system sits untouched in the other one:
+**2. Undoes the update, or finishes it — and checks whether that fixed the boot loop.**
 
 ```powershell
-ptransfer nokia --switch-slot     # fastboot set_active — writes nothing, erases nothing
-ptransfer reboot
+ptransfer nokia --fix-bootloop
 ```
 
-This is the most effective single fix for the exact failure Nokia owners hit most — "it
-rebooted during an update and now it won't start". If the locked bootloader refuses the
-switch, that is still not a dead end: it falls back to the other slot by itself after several
-failed boot attempts, so let the phone keep trying.
+This runs the experiment rather than describing it:
+
+1. **Undo the update.** Nearly every Nokia since the Android One line carries two complete
+   system slots. A failed update leaves the new slot unbootable while the previous, working
+   system sits untouched in the other — so switching back *is* undoing the update. Nothing is
+   written and userdata is not touched.
+2. **Restart and watch.** It waits for the phone to come back and checks `sys.boot_completed`,
+   so you get a real answer. A phone that appears and vanishes repeatedly is reported as still
+   looping rather than as an ambiguous timeout.
+3. **Roll back if it didn't help.** The original slot is restored automatically once the phone
+   returns to fastboot, and recorded to disk either way so `ptransfer nokia --undo-slot` works
+   later, even in a new session.
+4. **Then try the other direction** — finish the interrupted update: put the phone into
+   sideload, apply the package in full, reboot and check again.
+
+Reverting goes first deliberately: it writes nothing, takes two minutes and is trivially
+undone, whereas applying an update rewrites system partitions.
+
+```powershell
+ptransfer nokia --fix-bootloop --strategy revert            # only undo
+ptransfer nokia --fix-bootloop --strategy update --ota u.zip
+ptransfer nokia --switch-slot        # just the switch, no reboot-and-check
+ptransfer nokia --undo-slot          # put the slot back
+```
+
+If the locked bootloader refuses the switch, that is still not a dead end: it falls back to
+the other slot by itself after several failed boot attempts, so let the phone keep trying.
+
+One thing it is careful about: an option **skipped** because the phone was in the wrong mode is
+reported as untried, not as ruled out — otherwise you'd be pushed toward a factory reset with a
+repair still on the table.
 
 **3. Finds an update package the phone already downloaded.** If an OTA finished downloading
 before the phone broke, the signed zip is still in `/data/ota_package` or `/cache`. HMD signed
