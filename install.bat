@@ -94,6 +94,15 @@ echo.
 echo  ==============================================================
 echo   Done.
 echo.
+echo   Everything is installed in this folder:
+echo     %CD%
+echo.
+echo   adb and fastboot are in:
+echo     %LOCALAPPDATA%\PhoneDataTransfer\platform-tools
+echo.
+echo   To get back to this folder later, right-click the Desktop
+echo   shortcut and choose "Open file location".
+echo.
 echo   Start the app:      double-click "Phone Data Transfer.bat"
 echo                       (or the shortcut now on your Desktop)
 echo.
