@@ -96,7 +96,7 @@ def discover() -> Tools:
     return Tools(adb or "", fastboot or "", adb_src if adb else fb_src)
 
 
-def download_platform_tools(dest: Path | None = None, progress=None) -> Path:
+def download_platform_tools(dest: str | os.PathLike | None = None, progress=None) -> Path:
     """Fetch Google's platform-tools zip and unpack it.
 
     Returns the directory containing adb/fastboot. Network access required;
@@ -109,7 +109,9 @@ def download_platform_tools(dest: Path | None = None, progress=None) -> Path:
     if not url:
         raise RuntimeError(f"No platform-tools download known for {system}")
 
-    dest = dest or user_data_dir()
+    # Accept a plain string too - callers pass one from the command line and
+    # from the build script, and only Path has .mkdir().
+    dest = Path(dest) if dest is not None else user_data_dir()
     dest.mkdir(parents=True, exist_ok=True)
     zip_path = dest / "platform-tools.zip"
 

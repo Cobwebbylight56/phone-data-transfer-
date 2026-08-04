@@ -37,19 +37,32 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
 
+      # Nice to have, not essential: without it the app offers to download
+      # adb/fastboot on first run, so a blip at Google's end must not fail
+      # the whole build.
       - name: Fetch adb and fastboot to bundle
+        continue-on-error: true
         run: |
           python -c "from ptransfer.platform_tools import download_platform_tools; print(download_platform_tools('build-tools'))"
 
       - name: Build the app
+        shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed `
-            --name PhoneDataTransfer `
-            --paths src `
-            --collect-submodules ptransfer `
-            --collect-submodules ptransfer_gui `
-            --add-data "build-tools/platform-tools;platform-tools" `
-            src/ptransfer_gui/app.py
+          $args = @(
+            "--noconfirm", "--clean", "--onedir", "--windowed",
+            "--name", "PhoneDataTransfer",
+            "--paths", "src",
+            "--collect-submodules", "ptransfer",
+            "--collect-submodules", "ptransfer_gui"
+          )
+          if (Test-Path "build-tools/platform-tools/adb.exe") {
+            Write-Host "Bundling adb and fastboot."
+            $args += @("--add-data", "build-tools/platform-tools;platform-tools")
+          } else {
+            Write-Warning "platform-tools not fetched; the app will download them on first run."
+          }
+          $args += "src/ptransfer_gui/app.py"
+          python -m PyInstaller @args
 
       - name: Build the command line tool
         run: |

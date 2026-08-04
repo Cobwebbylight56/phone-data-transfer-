@@ -124,3 +124,23 @@ def test_bundle_names_are_filesystem_safe(label, prefix):
     name = safe_bundle_name(label)
     assert name.startswith(prefix)
     assert not set(name) & set('\\/:*?"<>|')
+
+
+def test_download_platform_tools_accepts_a_string_destination(tmp_path, monkeypatch):
+    """The build script and CLI both pass a plain string, not a Path."""
+    import zipfile
+
+    from ptransfer import platform_tools
+
+    def fake_retrieve(url, filename, reporthook=None):
+        with zipfile.ZipFile(filename, "w") as zf:
+            zf.writestr("platform-tools/adb", "#!/bin/sh\n")
+            zf.writestr("platform-tools/fastboot", "#!/bin/sh\n")
+
+    monkeypatch.setattr("urllib.request.urlretrieve", fake_retrieve)
+
+    out = platform_tools.download_platform_tools(str(tmp_path / "build-tools"))
+
+    assert out.name == "platform-tools"
+    assert (out / "adb").exists()
+    assert not (tmp_path / "build-tools" / "platform-tools.zip").exists()  # cleaned up
