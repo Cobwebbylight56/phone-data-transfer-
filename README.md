@@ -159,6 +159,34 @@ Run `ptransfer guide sony`.
 
 ---
 
+## Phone to phone, both plugged in
+
+Plug both phones into the PC. **Phone to phone** tab: pick the old one on the left, the new
+one on the right, press Start.
+
+```powershell
+ptransfer transfer                       # picks the pair, asks nothing else
+ptransfer transfer --from R58M1 --to R58M2
+ptransfer transfer --check               # run the checks only, move nothing
+```
+
+This is the route to use **when a screen is broken**, because the tap-to-tap transfer apps —
+Smart Switch, Xperia Transfer, Google's cable copy — all need you to tap through a wizard on
+the phone itself. With the PC as the hub there is nothing to tap: each side has a **Show this
+phone's screen** button that mirrors it so you can see and drive it from here.
+
+What it does:
+
+- reads the old phone into a staging bundle on the PC, then writes that to the new one
+- **never writes to the old phone** — it is only ever read
+- **keeps the bundle** by default, so you still hold a full verified backup afterwards, and an
+  interrupted transfer resumes instead of restarting
+- checks before it starts: both phones ready, not the same phone twice, and enough disk space
+- lists what still needs a tap on the new phone (contacts import, messages via the companion
+  app) rather than quietly finishing
+
+---
+
 ## Installing on Windows
 
 Pick **one** of these. Option A needs nothing installed; option B is fastest if you already

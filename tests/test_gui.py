@@ -392,3 +392,104 @@ def test_rapid_taps_do_not_hit_the_busy_gate(app, monkeypatch):
     assert busy == []            # no "Busy" popup
     assert sorted(taps) == [(1, 2), (3, 4)]
     window.close()
+
+
+# --- phone to phone ----------------------------------------------------
+def _two(app=None):
+    return [
+        Device(serial="OLD", state=State.ONLINE, manufacturer="Nokia", model="Nokia 8.3", sdk=30),
+        Device(serial="NEW", state=State.ONLINE, manufacturer="samsung", model="SM-S938B", sdk=34),
+    ]
+
+
+def test_transfer_page_guesses_old_and_new(app):
+    from ptransfer_gui.pages.transfer_page import TransferPage
+
+    page = TransferPage()
+    page.set_devices(_two())
+
+    assert page.source.current().serial == "OLD"   # older Android
+    assert page.target.current().serial == "NEW"
+    assert page.start_button.isEnabled()
+    assert "Nothing on the old phone is changed" in page.status.text()
+
+
+def test_transfer_page_refuses_the_same_phone_twice(app):
+    from ptransfer_gui.pages.transfer_page import TransferPage
+
+    page = TransferPage()
+    one = [Device(serial="OLD", state=State.ONLINE, model="Nokia 8.3")]
+    page.set_devices(one + one)
+    page.target.combo.setCurrentIndex(0)
+    page.source.combo.setCurrentIndex(0)
+
+    assert not page.start_button.isEnabled()
+    assert "same phone" in page.status.text()
+
+
+def test_transfer_page_blocks_a_phone_that_is_not_ready(app):
+    from ptransfer_gui.pages.transfer_page import TransferPage
+
+    page = TransferPage()
+    page.set_devices(
+        [
+            Device(serial="OLD", state=State.ONLINE, model="Nokia 8.3", sdk=30),
+            Device(serial="NEW", state=State.UNAUTHORIZED, model="SM-S938B", sdk=34),
+        ]
+    )
+    assert not page.start_button.isEnabled()
+    assert "Ask the phone for permission" in page.status.text()
+
+
+def test_swap_reverses_the_direction(app):
+    from ptransfer_gui.pages.transfer_page import TransferPage
+
+    page = TransferPage()
+    page.set_devices(_two())
+    page._swap()
+
+    assert page.source.current().serial == "NEW"
+    assert page.target.current().serial == "OLD"
+
+
+def test_each_side_can_be_mirrored_for_a_broken_screen(app):
+    from ptransfer_gui.pages.transfer_page import TransferPage
+
+    page = TransferPage()
+    page.set_devices(_two())
+
+    asked: list = []
+    page.mirror_requested.connect(asked.append)
+    page.source.mirror_button.click()
+
+    assert [d.serial for d in asked] == ["OLD"]
+
+
+def test_start_emits_both_phones_and_the_choices(app):
+    from ptransfer_gui.pages.transfer_page import TransferPage
+
+    page = TransferPage()
+    page.set_devices(_two())
+    page.checks["settings"].setChecked(False)
+
+    emitted: list = []
+    page.start_requested.connect(lambda *a: emitted.append(a))
+    page._start()
+
+    source, target, staging, sections, keep = emitted[0]
+    assert (source.serial, target.serial) == ("OLD", "NEW")
+    assert "settings" not in sections and "media" in sections
+    assert keep is True
+    assert staging
+
+
+def test_main_window_has_the_transfer_page(app, monkeypatch):
+    monkeypatch.setattr("ptransfer.devices.enumerate_usb", lambda runner=None: [])
+    from ptransfer_gui.main_window import PAGES, MainWindow
+
+    window = MainWindow()
+    assert "Phone to phone" in PAGES
+    assert window.stack.count() == len(PAGES)
+    window.transfer_page.set_devices(_two())
+    assert window.transfer_page.start_button.isEnabled()
+    window.close()

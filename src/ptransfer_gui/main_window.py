@@ -32,18 +32,20 @@ from ptransfer.progress import Event, Reporter
 from ptransfer.recovery import RescueEngine, diagnose
 from ptransfer.restore import RestoreEngine, RestoreOptions
 from ptransfer.screen import PhoneScreen, ScreenUnavailable, scrcpy_path
+from ptransfer.transfer import TransferEngine, TransferOptions
 
 from .pages.backup_page import BackupPage
 from .pages.devices_page import DevicesPage
 from .pages.guide_page import GuidePage
 from .pages.rescue_page import RescuePage
 from .pages.restore_page import RestorePage
+from .pages.transfer_page import TransferPage
 from .pages.screen_page import FrameStreamer, ScreenPage
 from .worker import Job
 
 log = logging.getLogger(__name__)
 
-PAGES = ["Phones", "Back up", "Restore", "Screen", "Rescue", "Brand guides"]
+PAGES = ["Phones", "Phone to phone", "Back up", "Restore", "Screen", "Rescue", "Brand guides"]
 
 
 class MainWindow(QMainWindow):
@@ -75,6 +77,7 @@ class MainWindow(QMainWindow):
         right = QVBoxLayout()
         self.stack = QStackedWidget()
         self.devices_page = DevicesPage()
+        self.transfer_page = TransferPage()
         self.backup_page = BackupPage()
         self.restore_page = RestorePage()
         self.screen_page = ScreenPage()
@@ -82,6 +85,7 @@ class MainWindow(QMainWindow):
         self.guide_page = GuidePage()
         for page in (
             self.devices_page,
+            self.transfer_page,
             self.backup_page,
             self.restore_page,
             self.screen_page,
@@ -105,6 +109,11 @@ class MainWindow(QMainWindow):
         self.devices_page.rescan_requested.connect(self.rescan)
         self.devices_page.authorize_requested.connect(self.ask_for_permission)
         self.devices_page.device_selected.connect(self._device_selected)
+
+        self.transfer_page.rescan_requested.connect(self.rescan)
+        self.transfer_page.start_requested.connect(self.start_transfer)
+        self.transfer_page.cancel_requested.connect(self.cancel_job)
+        self.transfer_page.mirror_requested.connect(self.mirror_this_phone)
 
         self.backup_page.start_requested.connect(self.start_backup)
         self.backup_page.cancel_requested.connect(self.cancel_job)
@@ -210,9 +219,41 @@ class MainWindow(QMainWindow):
 
         def done(devices):
             self.devices_page.set_devices(devices)
+            self.transfer_page.set_devices(devices)
             self.statusBar().showMessage(f"{len(devices)} device(s) found")
 
         self._run(scan, done)
+
+    def start_transfer(self, source: Device, target: Device, staging: str, sections: tuple, keep: bool) -> None:
+        """Old phone -> PC -> new phone, in one go."""
+        options = TransferOptions(sections=tuple(sections), keep_bundle=keep)
+
+        def work(reporter: Reporter, cancel):
+            engine = TransferEngine(self.manager, source, target, reporter, cancel)
+            return engine.run(Path(staging), options)
+
+        def done(report) -> None:
+            self.transfer_page.log.append("")
+            self.transfer_page.log.append(report.as_text())
+            self.statusBar().showMessage(
+                "Transfer finished" if report.ok else "Transfer finished with problems"
+            )
+            todo = report.todo()
+            body = report.as_text()
+            if todo:
+                body = "Finish these on the new phone:\n\n" + "\n".join(todo)
+            QMessageBox.information(self, "Transfer finished", body[:2000])
+
+        self._run(work, done, page=self.transfer_page)
+
+    def mirror_this_phone(self, device: Device) -> None:
+        """Jump to the Screen tab already mirroring the phone that was picked."""
+        if device is None:
+            return
+        self.selected = device
+        self.screen_page.set_device(device)
+        self.nav.setCurrentRow(PAGES.index("Screen"))
+        self.start_mirroring(device)
 
     def start_backup(self, device: Device, dest: str, sections: tuple, fresh: bool) -> None:
         options = BackupOptions(sections=tuple(sections), skip_existing=not fresh)

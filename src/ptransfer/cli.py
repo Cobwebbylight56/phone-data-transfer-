@@ -28,6 +28,7 @@ from .progress import Event, Reporter, human_bytes
 from .recovery import RescueEngine, diagnose
 from .restore import RestoreEngine, RestoreOptions
 from .screen import PhoneScreen, ScreenUnavailable, scrcpy_path
+from .transfer import TransferEngine, TransferOptions, pick_pair
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +116,16 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("bundle", help="path to the .ptbundle folder")
     r.add_argument("--sections", nargs="+", default=["media", "apps", "contacts", "sms", "calls"])
     r.add_argument("--no-apps", action="store_true", help="do not install APKs")
+
+    tr = sub.add_parser("transfer", help="copy one phone straight onto another, both plugged in")
+    tr.add_argument("--from", dest="source", default="", metavar="SERIAL", help="the old phone")
+    tr.add_argument("--to", dest="target", default="", metavar="SERIAL", help="the new phone")
+    tr.add_argument("--staging", default=".", help="where to hold the copy on the way through")
+    tr.add_argument("--sections", nargs="+", choices=SECTIONS, default=list(SECTIONS))
+    tr.add_argument("--no-apps", action="store_true", help="do not install apps on the new phone")
+    tr.add_argument("--delete-bundle", action="store_true",
+                    help="remove the staging copy afterwards (it is kept by default)")
+    tr.add_argument("--check", action="store_true", help="run the checks only, transfer nothing")
 
     v = sub.add_parser("verify", help="check a bundle against its checksums")
     v.add_argument("bundle")
@@ -204,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         "reboot": cmd_reboot,
         "nokia": cmd_nokia,
         "screen": cmd_screen,
+        "transfer": cmd_transfer,
         "authorize": cmd_authorize,
         "debug": cmd_authorize,
     }
@@ -394,6 +406,61 @@ def cmd_rescue(args, manager: DeviceManager) -> int:
         _line("")
         _line(engine.sideload(result.device, args.sideload))
     return 0
+
+
+def cmd_transfer(args, manager: DeviceManager) -> int:
+    devices = manager.scan()
+    ready = [d for d in devices if d.state.can_transfer]
+
+    source = _find(devices, args.source) if args.source else None
+    target = _find(devices, args.target) if args.target else None
+
+    if source is None or target is None:
+        guess_source, guess_target = pick_pair(devices)
+        source = source or guess_source
+        target = target or guess_target
+
+    if source is None or target is None:
+        _line("Two phones need to be connected and ready; found " f"{len(ready)}.")
+        for d in devices:
+            _line(f"  {d.summary()}")
+        _line("")
+        _line("Both phones must be booted with USB debugging allowed.")
+        _line("Run 'ptransfer authorize' for whichever one is not ready.")
+        return 1
+
+    _line(f"From: {source.summary()}")
+    _line(f"To:   {target.summary()}")
+    _line("")
+
+    engine = TransferEngine(manager, source, target, Reporter(console_sink(args.verbose)), Cancel())
+
+    problems = engine.preflight(args.staging)
+    if problems:
+        _line("Cannot start:")
+        for p in problems:
+            _line(f"  {p}")
+        return 1
+    if args.check:
+        _line("Checks passed - both phones are ready and there is room to work.")
+        return 0
+
+    options = TransferOptions(
+        sections=tuple(args.sections),
+        keep_bundle=not args.delete_bundle,
+        install_apps=not args.no_apps,
+    )
+    report = engine.run(Path(args.staging), options)
+    _line("")
+    _line(report.as_text())
+    return 0 if report.ok else 1
+
+
+def _find(devices: list[Device], serial: str) -> Device | None:
+    for d in devices:
+        if d.serial == serial:
+            return d
+    return None
 
 
 def cmd_authorize(args, manager: DeviceManager) -> int:
