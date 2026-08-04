@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+build-tools/
+platform-tools/
+.pytest_cache/
+.venv/
+venv/
+*.spec
+*.ptbundle/
+*.log
+
+# Android
+companion/.gradle/
+companion/local.properties
+companion/**/build/

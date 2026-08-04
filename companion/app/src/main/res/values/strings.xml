@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Phone Transfer Companion</string>
+    <string name="export_title">Export my data</string>
+    <string name="import_title">Import my data</string>
+
+    <string name="import_start">Import</string>
+    <string name="import_ready">Ready to import %1$s from:\n%2$s</string>
+    <string name="import_missing_file">Cannot find the file to import:\n%1$s\n\nRun the restore from the PC again.</string>
+    <string name="import_unknown_kind">Nothing here knows how to import \'%1$s\'.</string>
+
+    <string name="import_need_role">Android only lets the default SMS app write messages. Accept the next prompt, and you can switch your usual app back straight after.</string>
+    <string name="import_role_refused">Without the default SMS role Android will not allow messages to be written. Nothing was changed.</string>
+    <string name="import_sms_done">Imported %1$d messages (%2$d were already on this phone).\n\nNow switch your normal messaging app back.</string>
+    <string name="import_hand_back">Switch my messaging app back</string>
+    <string name="import_hand_back_hint">Choose your usual messaging app under Default apps.</string>
+    <string name="import_calls_done">Imported %1$d call log entries.</string>
+
+    <string name="compose_not_a_messenger">This app is not a messaging app. It borrows the SMS role only while restoring your messages - please set your usual app back as the default.</string>
+</resources>

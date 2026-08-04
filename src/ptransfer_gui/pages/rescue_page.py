@@ -1,0 +1,199 @@
+"""Rescue page: for a phone that will not boot.
+
+Deliberately opinionated layout - the diagnosis at the top, the ordered plan
+below it, and the destructive options visually separated from the safe ones.
+Someone using this screen is stressed and about to make an irreversible choice.
+"""
+
+from __future__ import annotations
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ptransfer.oem import ALL_PROFILES
+from ptransfer.progress import Event
+from ptransfer.recovery import Diagnosis
+
+SEVERITY_STYLE = {
+    "fine": ("#1a7f37", "The phone is healthy"),
+    "soft-brick": ("#9a6700", "Soft-bricked — repairable"),
+    "deep": ("#b35900", "Deep rescue mode"),
+    "unknown": ("#57606a", "Not sure yet"),
+}
+
+
+class RescuePage(QWidget):
+    diagnose_requested = Signal(str)
+    extract_requested = Signal(object, str)
+    sideload_requested = Signal(object, str)
+    reboot_requested = Signal(object, str)
+    restart_adb_requested = Signal()
+    backup_requested = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.diagnosis: Diagnosis | None = None
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<h2>Phone will not start</h2>"))
+
+        intro = QLabel(
+            "Run the diagnosis with the phone connected. It checks adb, fastboot, and the raw USB "
+            "layer, so it can still identify a phone that ordinary tools cannot see at all."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #57606a;")
+        layout.addWidget(intro)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Brand:"))
+        self.brand_combo = QComboBox()
+        self.brand_combo.addItem("Detect automatically", "")
+        for p in ALL_PROFILES:
+            self.brand_combo.addItem(p.display_name, p.key)
+        row.addWidget(self.brand_combo)
+        self.diagnose_button = QPushButton("Diagnose")
+        self.diagnose_button.clicked.connect(
+            lambda: self.diagnose_requested.emit(self.brand_combo.currentData())
+        )
+        row.addWidget(self.diagnose_button)
+        restart = QPushButton("Restart adb")
+        restart.clicked.connect(self.restart_adb_requested.emit)
+        row.addWidget(restart)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        self.headline = QLabel("")
+        self.headline.setWordWrap(True)
+        layout.addWidget(self.headline)
+
+        self.report = QTextEdit()
+        self.report.setReadOnly(True)
+        layout.addWidget(self.report, 3)
+
+        safe_box = QGroupBox("Safe actions — none of these erase anything")
+        safe_layout = QHBoxLayout(safe_box)
+        for label, target in (
+            ("Reboot to system", ""),
+            ("Reboot to recovery", "recovery"),
+            ("Reboot to bootloader", "bootloader"),
+        ):
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, t=target: self._reboot(t))
+            safe_layout.addWidget(b)
+        extract = QPushButton("Try to rescue files from recovery")
+        extract.clicked.connect(self._extract)
+        safe_layout.addWidget(extract)
+        layout.addWidget(safe_box)
+
+        repair_box = QGroupBox("Repair the system (keeps your files)")
+        repair_layout = QHBoxLayout(repair_box)
+        sideload = QPushButton("Apply an OTA update package…")
+        sideload.clicked.connect(self._sideload)
+        repair_layout.addWidget(sideload)
+        repair_layout.addStretch(1)
+        layout.addWidget(repair_box)
+
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumHeight(140)
+        layout.addWidget(self.log, 1)
+
+    # --- display ------------------------------------------------------
+    def show_diagnosis(self, diagnosis: Diagnosis) -> None:
+        self.diagnosis = diagnosis
+        colour, label = SEVERITY_STYLE.get(diagnosis.severity, SEVERITY_STYLE["unknown"])
+        self.headline.setText(
+            f"<h3 style='color:{colour}'>{label}</h3>"
+            f"<p><b>{diagnosis.situation}</b></p><p>{diagnosis.explanation}</p>"
+        )
+        self.report.setHtml(self._render(diagnosis))
+
+    def _render(self, d: Diagnosis) -> str:
+        html: list[str] = []
+        if d.warnings:
+            html.append("<div style='color:#cf222e'>")
+            for w in d.warnings:
+                html.append(f"<p><b>Warning:</b> {w}</p>")
+            html.append("</div>")
+
+        html.append("<h4>What to do, in order</h4><ol>")
+        for step in d.steps:
+            flag = " <span style='color:#cf222e'><b>[ERASES YOUR DATA]</b></span>" if step.warns else ""
+            html.append(f"<li><b>{step.title}</b>{flag}<br>{step.detail}</li>")
+        html.append("</ol>")
+
+        if d.profile.key_combos:
+            html.append(f"<h4>Button combinations — {d.profile.display_name}</h4><ul>")
+            for c in d.profile.key_combos:
+                note = f"<br><i>{c.note}</i>" if c.note else ""
+                html.append(f"<li><b>{c.mode}</b>: {c.steps}{note}</li>")
+            html.append("</ul>")
+
+        if d.profile.tools:
+            html.append("<h4>Vendor tools</h4><ul>")
+            for t in d.profile.tools:
+                colour = {"safe": "#1a7f37", "usually": "#9a6700", "wipes": "#cf222e"}[t.data_safety.value]
+                tag = {"safe": "data-safe", "usually": "usually keeps data", "wipes": "ERASES DATA"}[t.data_safety.value]
+                url = f"<br><a href='{t.url}'>{t.url}</a>" if t.url else ""
+                note = f"<br><i>{t.note}</i>" if t.note else ""
+                html.append(
+                    f"<li><b>{t.name}</b> <span style='color:{colour}'>[{tag}]</span><br>{t.purpose}{url}{note}</li>"
+                )
+            html.append("</ul>")
+
+        if d.profile.notes:
+            html.append("<h4>Worth knowing</h4><ul>")
+            for n in d.profile.notes:
+                html.append(f"<li>{n}</li>")
+            html.append("</ul>")
+        return "".join(html)
+
+    # --- actions ------------------------------------------------------
+    def _device(self):
+        return self.diagnosis.device if self.diagnosis else None
+
+    def _reboot(self, target: str) -> None:
+        device = self._device()
+        if device is None:
+            self.log.append("Run the diagnosis first so I know which phone to talk to.")
+            return
+        self.reboot_requested.emit(device, target)
+
+    def _extract(self) -> None:
+        device = self._device()
+        if device is None:
+            self.log.append("Run the diagnosis first.")
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Where should rescued files go?")
+        if folder:
+            self.extract_requested.emit(device, folder)
+
+    def _sideload(self) -> None:
+        device = self._device()
+        if device is None:
+            self.log.append("Run the diagnosis first.")
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Choose the OTA update package", "", "Update packages (*.zip)")
+        if path:
+            self.log.append(
+                "Put the phone in recovery and choose 'Apply update from ADB' before this starts."
+            )
+            self.sideload_requested.emit(device, path)
+
+    def on_event(self, e: Event) -> None:
+        if e.message:
+            self.log.append(e.message)
+
+    def append(self, text: str) -> None:
+        self.log.append(text)

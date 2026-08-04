@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phone-data-transfer"
+version = "0.1.0"
+description = "Copy everything off an Android phone onto another, and rescue one that will not boot."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.5"]
+dev = ["pytest>=7.4", "PySide6>=6.5", "pyinstaller>=6.3"]
+
+[project.scripts]
+ptransfer = "ptransfer.cli:main"
+
+[project.gui-scripts]
+phone-data-transfer = "ptransfer_gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["error::DeprecationWarning:ptransfer.*"]
