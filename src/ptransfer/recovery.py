@@ -215,7 +215,10 @@ def diagnose(devices: list[Device], hint_brand: str = "") -> Diagnosis:
                     "rebuilds the system and keeps userdata.",
                     action="sideload",
                 ),
-                *[s for s in profile.rescue_steps if s.data_safety is not DataSafety.SAFE],
+                # Brand steps that only work from recovery - for Nokia, the
+                # signed OTA already sitting on the phone.
+                *_vendor_steps(profile, State.RECOVERY, only_state_specific=True),
+                *_vendor_steps(profile, State.RECOVERY, risky_only=True),
             ],
             warnings=[
                 "Do not choose 'Wipe data/factory reset' in that menu. It erases exactly what you "
@@ -247,6 +250,9 @@ def diagnose(devices: list[Device], hint_brand: str = "") -> Diagnosis:
                     "Some phones sit in fastboot after an interrupted update and boot fine when told to.",
                     action="reboot-system",
                 ),
+                # Brand steps that only work from fastboot - the A/B slot switch
+                # above all - belong here, ahead of the generic advice.
+                *_vendor_steps(profile, State.BOOTLOADER, only_state_specific=True),
                 RescueStep(
                     "Boot into recovery from here",
                     "Recovery gives you the data-safe cache wipe and OTA sideload options.",
@@ -258,7 +264,7 @@ def diagnose(devices: list[Device], hint_brand: str = "") -> Diagnosis:
                     "flash userdata for you, on purpose.",
                     DataSafety.USUALLY_SAFE,
                 ),
-                *[s for s in profile.rescue_steps if s.action in ("", "backup-now")],
+                *_vendor_steps(profile, State.BOOTLOADER, actions=("", "backup-now")),
             ],
             warnings=warn,
         )
@@ -464,6 +470,30 @@ class RescueEngine:
             files_pulled=pulled,
             destination=str(dest),
         )
+
+
+def _vendor_steps(
+    profile: VendorProfile,
+    state: State,
+    actions: tuple[str, ...] | None = None,
+    only_state_specific: bool = False,
+    risky_only: bool = False,
+) -> list[RescueStep]:
+    """Brand steps worth showing for a phone in ``state``.
+
+    ``only_state_specific`` picks out the steps that named this state
+    explicitly - the ones that only work here, which deserve to come first.
+    ``risky_only`` picks the last-resort ones, which belong at the end.
+    """
+    steps = [s for s in profile.rescue_steps if s.relevant_in(state.value)]
+    if only_state_specific:
+        return [s for s in steps if s.applies_to]
+    steps = [s for s in steps if not s.applies_to]
+    if risky_only:
+        return [s for s in steps if s.data_safety is not DataSafety.SAFE]
+    if actions is not None:
+        steps = [s for s in steps if s.action in actions]
+    return steps
 
 
 def _looks_encrypted(listing: str) -> bool:

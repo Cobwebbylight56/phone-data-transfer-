@@ -140,3 +140,39 @@ def test_main_window_builds(app, monkeypatch):
     assert window.stack.count() == len(PAGES)
     assert window.nav.count() == len(PAGES)
     window.close()
+
+
+def test_nokia_panel_appears_only_for_a_nokia(app):
+    from ptransfer_gui.pages.rescue_page import RescuePage
+
+    page = RescuePage()
+    assert not page.nokia_box.isVisible()
+
+    page.show_diagnosis(diagnose([Device(serial="S", state=State.RECOVERY, manufacturer="Sony")]))
+    assert not page.nokia_box.isVisibleTo(page)
+
+    page.show_diagnosis(diagnose([Device(serial="S", state=State.RECOVERY, manufacturer="HMD Global")]))
+    assert page.nokia_box.isVisibleTo(page)
+
+
+def test_nokia_buttons_emit_their_action(app):
+    from ptransfer_gui.pages.rescue_page import RescuePage
+
+    page = RescuePage()
+    page.show_diagnosis(diagnose([Device(serial="S", state=State.BOOTLOADER, manufacturer="HMD Global")]))
+
+    seen: list[tuple] = []
+    page.nokia_requested.connect(lambda d, a: seen.append((d, a)))
+    page._nokia_switch_slot()
+    page._nokia_guided()
+
+    assert [a for _, a in seen] == ["switch-slot", "guided"]
+
+
+def test_nokia_rescue_plan_names_the_slot_switch(app):
+    from ptransfer_gui.pages.rescue_page import RescuePage
+
+    page = RescuePage()
+    page.show_diagnosis(diagnose([Device(serial="S", state=State.BOOTLOADER, manufacturer="HMD Global")]))
+    html = page.report.toHtml()
+    assert "slot" in html.lower()

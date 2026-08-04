@@ -60,13 +60,64 @@ The Rescue tab is built around exactly that order. It:
 It will never unlock your bootloader. On a locked phone that forces a factory reset, which
 is the single most common way people permanently lose the data they were trying to rescue.
 
-### Nokia (HMD)
+### Nokia (HMD) — the guided rescue
 
-HMD's flashing tools (OST LA / NOST) go to authorised service points only, and the copies
-on forums are unlicensed and routinely repackaged with malware — so this app does not link
-to or drive them. For a Nokia the data-preserving moves are the recovery-menu ones, and past
-that it is a Nokia care point. Ask them explicitly for a reflash that preserves userdata; the
-default service procedure often wipes.
+```powershell
+ptransfer nokia
+```
+
+This does real work rather than giving advice. Everything it does is read-only or
+non-destructive:
+
+**1. Reads the phone's own crash log.** Stock recovery writes *why* the boot or update failed
+to `last_log`, and it is readable over adb whenever the phone reaches recovery. It usually
+names the problem outright — "failed to mount /data", "dm-verity verification failed",
+"package is for product TA-1234 but expected TA-1243" — and the app translates each into what
+it means and what to do. Almost nobody looks at this file; it is the most informative thing on
+a phone that will not start.
+
+**2. Checks the A/B system slots, and can switch them.** Nearly every Nokia since the Android
+One line carries two complete system slots. A failed update leaves the new slot unbootable
+while the previous, working system sits untouched in the other one:
+
+```powershell
+ptransfer nokia --switch-slot     # fastboot set_active — writes nothing, erases nothing
+ptransfer reboot
+```
+
+This is the most effective single fix for the exact failure Nokia owners hit most — "it
+rebooted during an update and now it won't start". If the locked bootloader refuses the
+switch, that is still not a dead end: it falls back to the other slot by itself after several
+failed boot attempts, so let the phone keep trying.
+
+**3. Finds an update package the phone already downloaded.** If an OTA finished downloading
+before the phone broke, the signed zip is still in `/data/ota_package` or `/cache`. HMD signed
+it, so recovery accepts it — and it is the one legitimate route to a signed Nokia OTA, since
+HMD does not publish them:
+
+```powershell
+ptransfer nokia --apply-ota
+```
+
+**4. Identifies the chipset** (MediaTek / Qualcomm / Unisoc) from `ro.board.platform`, or from
+the USB vendor ID when the phone is too broken to read properties — so you know which
+low-level mode to expect.
+
+Other commands:
+
+```powershell
+ptransfer nokia --logs                  # the full crash log, plus what it means
+ptransfer nokia --report nokia.txt      # everything, written to a file
+```
+
+In the window, the Nokia panel appears on the Rescue tab automatically when a Nokia is
+detected.
+
+**What it still won't do:** HMD's flashing tools (OST LA / NOST) go to authorised service
+points only, and forum copies are unlicensed and routinely repackaged with malware — so the
+app neither links to nor drives them. If the steps above don't get it booting, it is a Nokia
+care point; ask them explicitly for a reflash that **preserves userdata**, because the default
+service procedure often wipes.
 
 Run `ptransfer guide nokia` for the full write-up.
 

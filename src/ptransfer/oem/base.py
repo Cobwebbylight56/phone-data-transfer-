@@ -42,10 +42,17 @@ class RescueStep:
     data_safety: DataSafety = DataSafety.SAFE
     # Optional machine-executable action id handled by recovery.py
     action: str = ""
+    # Device states this step is worth showing in, by State.value. Empty means
+    # "always relevant". Without this a state-specific step - switching A/B
+    # slots, which only works from fastboot - gets shown everywhere or nowhere.
+    applies_to: tuple[str, ...] = ()
 
     @property
     def warns(self) -> bool:
         return self.data_safety is DataSafety.WIPES
+
+    def relevant_in(self, state: str) -> bool:
+        return not self.applies_to or state in self.applies_to
 
 
 @dataclass

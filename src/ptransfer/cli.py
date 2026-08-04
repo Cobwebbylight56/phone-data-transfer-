@@ -16,6 +16,7 @@ from .backup import SECTIONS, BackupEngine, BackupOptions
 from .devices import Device, DeviceManager, State
 from .logging_setup import setup_logging
 from .manifest import Bundle, safe_bundle_name
+from .nokia import OTA_SEARCH_DIRS, NokiaRescue, is_nokia
 from .oem import ALL_PROFILES, profile_for
 from .platform_tools import download_platform_tools, discover, user_data_dir
 from .proc import Cancel, ToolError
@@ -119,6 +120,14 @@ def build_parser() -> argparse.ArgumentParser:
     rescue.add_argument("--sideload", metavar="ZIP", help="apply a signed OTA zip from recovery")
     rescue.add_argument("--restart-adb", action="store_true", help="restart the adb server and rescan")
 
+    n = sub.add_parser("nokia", help="Nokia-specific rescue: slot switching, log analysis, on-device OTA")
+    n.add_argument("--switch-slot", nargs="?", const="", metavar="A|B",
+                   help="boot from the other system slot (data-safe, writes nothing)")
+    n.add_argument("--logs", action="store_true", help="dump the full recovery log")
+    n.add_argument("--apply-ota", action="store_true", help="use an update package already on the phone")
+    n.add_argument("--workdir", default=".", help="where to save pulled packages")
+    n.add_argument("--report", metavar="FILE", help="write the full report to a file")
+
     g = sub.add_parser("guide", help="print the rescue guide for a brand")
     g.add_argument("brand", nargs="?", default="", help="nokia, sony, samsung, ... (blank lists them)")
 
@@ -155,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         "restore": cmd_restore,
         "rescue": cmd_rescue,
         "reboot": cmd_reboot,
+        "nokia": cmd_nokia,
     }
     try:
         return handlers[args.command](args, manager)
@@ -339,6 +349,102 @@ def cmd_rescue(args, manager: DeviceManager) -> int:
         _line("")
         _line(engine.sideload(result.device, args.sideload))
     return 0
+
+
+def cmd_nokia(args, manager: DeviceManager) -> int:
+    reporter = Reporter(console_sink(args.verbose))
+    rescue = NokiaRescue(manager, reporter, Cancel())
+
+    devices = manager.scan()
+    if not devices:
+        _line("No phone detected.")
+        _line("")
+        _line("For a Nokia that will not boot, get it into one of these first:")
+        _line("  recovery  - power off, hold Volume Up, then press and hold Power")
+        _line("  fastboot  - power off, hold Volume Down, then connect the USB cable")
+        _line("")
+        _line("Then run this again. Recovery gives the log; fastboot gives the slot switch.")
+        return 1
+
+    device = _select_nokia(devices)
+    if device is None:
+        return 1
+
+    # A single action was asked for.
+    if args.switch_slot is not None:
+        outcome = rescue.switch_slot(device, args.switch_slot or "")
+        _line(f"{outcome.status}: {outcome.message}")
+        if outcome.detail:
+            _line(f"  {outcome.detail}")
+        if outcome.helped:
+            _line("")
+            _line("Now reboot the phone:  ptransfer reboot")
+        return 0 if outcome.helped else 1
+
+    if args.logs:
+        text = rescue.read_recovery_log(device)
+        if not text:
+            _line("No recovery log reachable. Put the phone in recovery mode and try again.")
+            return 1
+        _line(text)
+        findings = rescue.analyse_log(text)
+        if findings:
+            _line("")
+            _line("Recognised problems:")
+            for f in findings:
+                _line(f"  [{f.severity}] {f.meaning}")
+                _line(f"      -> {f.next_step}")
+        return 0
+
+    if args.apply_ota:
+        packages = rescue.find_ota_packages(device)
+        if not packages:
+            _line("No update package found on the phone.")
+            _line("Checked: " + ", ".join(OTA_SEARCH_DIRS))
+            return 1
+        _line("Update packages on the phone:")
+        for p in packages:
+            _line(f"  {p}")
+        outcome = rescue.apply_ota_from_device(device, packages[0], Path(args.workdir))
+        _line("")
+        _line(f"{outcome.status}: {outcome.message}")
+        if outcome.detail:
+            _line(f"  {outcome.detail}")
+        return 0 if outcome.status in ("ok", "needs-user") else 1
+
+    # Default: the full guided run.
+    report = rescue.guided_rescue(device, Path(args.workdir))
+    _line("")
+    _line(report.as_text())
+
+    if args.report:
+        path = Path(args.report)
+        body = report.as_text()
+        if report.log_excerpt:
+            body += "\n\n===== recovery log =====\n" + report.log_excerpt
+        path.write_text(body, encoding="utf-8")
+        _line("")
+        _line(f"Full report written to {path}")
+    return 0
+
+
+def _select_nokia(devices: list[Device]) -> Device | None:
+    nokias = [d for d in devices if is_nokia(d)]
+    if nokias:
+        return nokias[0]
+    if len(devices) == 1:
+        device = devices[0]
+        _line(
+            f"Note: {device.label} does not identify as a Nokia, but it is the only phone "
+            "connected, so continuing with it."
+        )
+        _line("(A phone in fastboot or a low-level mode often reports no brand at all.)")
+        _line("")
+        return device
+    _line("More than one phone connected and none identifies as a Nokia. Use -s SERIAL.")
+    for d in devices:
+        _line(f"  {d.summary()}")
+    return None
 
 
 def cmd_guide(args) -> int:

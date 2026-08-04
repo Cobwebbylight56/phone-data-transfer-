@@ -39,6 +39,7 @@ class RescuePage(QWidget):
     reboot_requested = Signal(object, str)
     restart_adb_requested = Signal()
     backup_requested = Signal()
+    nokia_requested = Signal(object, str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -104,6 +105,22 @@ class RescuePage(QWidget):
         repair_layout.addStretch(1)
         layout.addWidget(repair_box)
 
+        # Nokia gets its own panel: these actions do real work rather than
+        # print advice, and they are the ones most likely to fix the phone.
+        self.nokia_box = QGroupBox("Nokia — everything here is data-safe")
+        nokia_layout = QHBoxLayout(self.nokia_box)
+        for label, slot in (
+            ("Guided rescue", self._nokia_guided),
+            ("Read the phone's crash log", self._nokia_logs),
+            ("Switch system slot", self._nokia_switch_slot),
+            ("Find update on phone", self._nokia_find_ota),
+        ):
+            b = QPushButton(label)
+            b.clicked.connect(slot)
+            nokia_layout.addWidget(b)
+        self.nokia_box.setVisible(False)
+        layout.addWidget(self.nokia_box)
+
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumHeight(140)
@@ -112,6 +129,7 @@ class RescuePage(QWidget):
     # --- display ------------------------------------------------------
     def show_diagnosis(self, diagnosis: Diagnosis) -> None:
         self.diagnosis = diagnosis
+        self.nokia_box.setVisible(diagnosis.profile.key == "nokia")
         colour, label = SEVERITY_STYLE.get(diagnosis.severity, SEVERITY_STYLE["unknown"])
         self.headline.setText(
             f"<h3 style='color:{colour}'>{label}</h3>"
@@ -190,6 +208,26 @@ class RescuePage(QWidget):
                 "Put the phone in recovery and choose 'Apply update from ADB' before this starts."
             )
             self.sideload_requested.emit(device, path)
+
+    # --- Nokia --------------------------------------------------------
+    def _nokia(self, action: str) -> None:
+        device = self._device()
+        if device is None:
+            self.log.append("Run the diagnosis first.")
+            return
+        self.nokia_requested.emit(device, action)
+
+    def _nokia_guided(self) -> None:
+        self._nokia("guided")
+
+    def _nokia_logs(self) -> None:
+        self._nokia("logs")
+
+    def _nokia_switch_slot(self) -> None:
+        self._nokia("switch-slot")
+
+    def _nokia_find_ota(self) -> None:
+        self._nokia("find-ota")
 
     def on_event(self, e: Event) -> None:
         if e.message:

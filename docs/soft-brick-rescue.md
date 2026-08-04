@@ -125,6 +125,79 @@ A phone that booted once may not boot twice.
 
 # Nokia (HMD Global)
 
+## Start here: `ptransfer nokia`
+
+The guided rescue runs every data-safe repair in order and tells you what it found. Run it
+with the phone in **recovery** for the crash log, and again in **fastboot** for the slot
+check — the two modes expose different things and the report says which is missing.
+
+### The crash log — read this first
+
+Stock Android recovery writes the reason a boot or update failed to `last_log`
+(`/cache/recovery/last_log`, or `/data/cache/recovery/last_log` on A/B devices). It is
+readable over adb from recovery, and it usually names the fault outright.
+
+```
+ptransfer nokia --logs
+```
+
+What the app recognises, and what each one means:
+
+| In the log | What it means | What to do |
+|---|---|---|
+| `failed to mount /data` | The partition holding all your files won't mount | **Never accept an offer to format data.** A filesystem check can often mount it intact |
+| `dm-verity verification failed` | Verified boot rejected the system partition | Switch A/B slot — userdata is untouched by this fault |
+| `signature verification failed`, `footer is wrong` | The update package is corrupt or unsigned | Re-download; never force an unsigned zip onto a locked phone |
+| `Package is for product …` | Firmware built for a different Nokia | Match the exact TA number — wrong-model firmware turns a soft-brick into a hard one |
+| `no bootable slot`, `slot … is unbootable` | The bootloader gave up on the current slot | Switch slots — exactly the case it exists for |
+| `failed to setup keystore` | The phone can't unlock its own encryption | Hardest case; only a userdata-preserving reflash may help |
+
+### The slot switch — the highest-value repair
+
+Nearly every Nokia since the Android One line is an A/B device: two complete, independent
+system slots. When an update fails halfway, the *new* slot is broken and the *old* one still
+holds a perfectly good system.
+
+```
+ptransfer nokia            # check: which slot is active, which is marked unbootable
+ptransfer nokia --switch-slot
+ptransfer reboot
+```
+
+`fastboot set_active` changes one flag. No partition is written. Userdata is not touched. If
+it boots, **back up before doing anything else**, then let the update reinstall properly.
+
+If the bootloader refuses because it is locked ("Slot Change is not allowed in Lock State"),
+that is not the end: after several consecutive failed boots the bootloader falls back to the
+other slot on its own. Leave the phone attempting to boot a few more times.
+
+### The signed OTA that is already on your phone
+
+HMD does not publish OTA zips, which normally makes recovery's "Apply update from ADB"
+useless. But if an update finished downloading before the phone broke, that package is still
+on the device and **still signed by HMD**:
+
+```
+ptransfer nokia --apply-ota
+```
+
+It searches `/data/ota_package`, `/cache`, `/data/cache` and `/sdcard`, rejects truncated
+downloads, copies the package off, and tells you the sideload command to finish with. This is
+the one legitimate route to a signed Nokia OTA.
+
+### Chipsets
+
+Nokia splits three ways, which decides what the deepest rescue mode looks like:
+
+| Chipset | `ro.board.platform` | Low-level mode | Typical models |
+|---|---|---|---|
+| Qualcomm | `sdm*`, `msm*`, `sm*` | EDL 9008 (`05c6:9008`) | 6.x, 7.x, 8.x, 9, X10/X20, 5.3 |
+| MediaTek | `mt*` | preloader / BROM (`0e8d:*`) | 1.x, 3.x, G10, G20 |
+| Unisoc | `ums*`, `sp9*` | SPRD download (`1782:4d00`) | G11, G21, C21 |
+
+The app detects this from the phone when it can, and from the USB vendor ID when the phone is
+too broken to answer.
+
 **Button combinations**
 
 - Recovery: power off; hold **Volume Up**, then press and hold Power; release Power at the
@@ -139,15 +212,9 @@ HMD's flashing tools (OST LA, NOST) are distributed to authorised service points
 copies circulating on forums are unlicensed and routinely repackaged with malware. This app
 does not link to them or drive them, and neither should you.
 
-HMD also does not publish signed OTA zips, so recovery sideload usually has nothing legitimate
-to feed it.
-
-**So for a Nokia:** the recovery-menu repairs are your data-safe options, and past that it is a
-Nokia care point. Ask them explicitly for a software reflash that **preserves userdata** — the
-default service procedure often wipes, and nobody will ask you first.
-
-Nokia models split between MediaTek (`ro.board.platform` starts with `mt`) and Qualcomm
-(`msm`/`sdm`/`sm`). It changes which low-level mode you will see, not what you should do.
+**So if the three repairs above don't work:** it is a Nokia care point. Ask them explicitly
+for a software reflash that **preserves userdata** — the default service procedure often
+wipes, and nobody will ask you first.
 
 Do not unlock the bootloader to "get in". On a locked Nokia that forces a wipe, and HMD
 stopped issuing unlock codes for most models anyway.

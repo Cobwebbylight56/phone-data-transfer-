@@ -23,6 +23,7 @@ from ptransfer import __version__
 from ptransfer.backup import BackupEngine, BackupOptions
 from ptransfer.devices import Device, DeviceManager
 from ptransfer.logging_setup import log_file
+from ptransfer.nokia import NokiaRescue
 from ptransfer.platform_tools import download_platform_tools, discover
 from ptransfer.progress import Event, Reporter
 from ptransfer.recovery import RescueEngine, diagnose
@@ -99,6 +100,7 @@ class MainWindow(QMainWindow):
         self.rescue_page.sideload_requested.connect(self.start_sideload)
         self.rescue_page.reboot_requested.connect(self.do_reboot)
         self.rescue_page.restart_adb_requested.connect(self.do_restart_adb)
+        self.rescue_page.nokia_requested.connect(self.run_nokia_action)
 
     def _switch_page(self, row: int) -> None:
         self.stack.setCurrentIndex(row)
@@ -257,6 +259,45 @@ class MainWindow(QMainWindow):
 
         def done(message):
             self.rescue_page.append(message)
+
+        self._run(work, done, page=self.rescue_page)
+
+    def run_nokia_action(self, device: Device, action: str) -> None:
+        def work(reporter: Reporter, cancel):
+            rescue = NokiaRescue(self.manager, reporter, cancel)
+            if action == "guided":
+                return rescue.guided_rescue(device, Path.home()).as_text()
+            if action == "logs":
+                text = rescue.read_recovery_log(device)
+                if not text:
+                    return (
+                        "No crash log reachable. The phone has to be in recovery mode for this:\n"
+                        "power it off, hold Volume Up, then press and hold Power."
+                    )
+                findings = rescue.analyse_log(text)
+                if not findings:
+                    return "Log retrieved, but nothing in it matches a known failure.\n\n" + text[-2000:]
+                lines = ["What the phone says went wrong:", ""]
+                for f in findings:
+                    lines.append(f"  [{f.severity}] {f.meaning}")
+                    lines.append(f"      -> {f.next_step}")
+                return "\n".join(lines)
+            if action == "switch-slot":
+                outcome = rescue.switch_slot(device)
+                text = f"{outcome.status}: {outcome.message}"
+                return text + (f"\n  {outcome.detail}" if outcome.detail else "")
+            if action == "find-ota":
+                packages = rescue.find_ota_packages(device)
+                if not packages:
+                    return "No update package found on the phone."
+                outcome = rescue.apply_ota_from_device(device, packages[0], Path.home())
+                return f"{outcome.status}: {outcome.message}\n  {outcome.detail}"
+            return f"Unknown action {action}"
+
+        def done(text: str) -> None:
+            self.rescue_page.append(text)
+            if action in ("guided", "switch-slot"):
+                QMessageBox.information(self, "Nokia rescue", text[:2000])
 
         self._run(work, done, page=self.rescue_page)
 

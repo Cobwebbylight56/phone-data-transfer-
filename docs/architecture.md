@@ -19,6 +19,7 @@ ptransfer/               the engine - pure stdlib, no Qt, importable and testabl
     backup.py            phone  -> bundle
     restore.py           bundle -> phone
     recovery.py          diagnosis + rescue actions
+    nokia.py             Nokia rescue: A/B slots, recovery-log analysis, on-device OTA
     oem/                 per-brand knowledge (nokia, sony, generic)
     progress.py          Event/Reporter shared by CLI and GUI
     cli.py               everything the GUI can do, scriptable
@@ -37,7 +38,15 @@ still gets their photos.
 **Vendor knowledge is data, not code.** `oem/` holds `VendorProfile` records — key combos,
 tools, ordered rescue steps, each tagged `SAFE` / `USUALLY_SAFE` / `WIPES`. Adding a brand is
 adding a record. The `WIPES` tag is what drives the red warnings in the GUI, so a destructive
-step cannot be added without it being labelled.
+step cannot be added without it being labelled. A step may also declare `applies_to` — the
+device states it is worth showing in — so a fastboot-only action like the A/B slot switch
+leads the plan in fastboot and is absent from the recovery plan, rather than being shown
+everywhere or nowhere.
+
+**Brand *actions* get their own module when there is real work to do.** `nokia.py` is the
+example: reading the phone's `last_log` and translating known failure signatures, reading and
+switching A/B slots, and finding the signed OTA the phone already downloaded. The generic
+rescue explains; this executes.
 
 **Refusals live in the layer that knows.** `Fastboot.flash` raises on `userdata`/`metadata`/
 `persist` rather than relying on the UI to not offer it.
@@ -74,7 +83,7 @@ verification pass, and `test_missing_files_are_reported_as_partial` proves the p
 making a file genuinely unpullable rather than mocking the outcome.
 
 ```bash
-python -m pytest            # 97 tests, no hardware, no display
+python -m pytest            # 129 tests, no hardware, no display
 ```
 
 GUI tests run under `QT_QPA_PLATFORM=offscreen` and skip if PySide6 is absent.

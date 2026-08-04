@@ -80,10 +80,30 @@ PROFILE = VendorProfile(
             action="force-restart",
         ),
         RescueStep(
-            "Check what Windows sees",
-            "Run a scan in this app with the phone connected. If it appears as a MediaTek preloader "
-            "or Qualcomm 9008 device, the phone is alive - it just is not booting Android.",
-            action="scan",
+            "Run the guided Nokia rescue",
+            "Connect the phone and run 'ptransfer nokia'. It reads the phone's own recovery log to "
+            "find out what actually failed, checks the A/B system slots, and looks for an update "
+            "package already on the phone. Every check is read-only.",
+            action="nokia-guided",
+        ),
+        RescueStep(
+            "Switch to the other system slot",
+            "Nearly every Nokia since the Android One line carries two complete system slots. A "
+            "failed update leaves the new one unbootable while the previous, working system sits "
+            "untouched in the other. 'ptransfer nokia --switch-slot' swaps them - it writes "
+            "nothing and does not touch your data. This is the most effective single fix for a "
+            "Nokia that died during an update.",
+            action="nokia-switch-slot",
+            applies_to=("bootloader",),
+        ),
+        RescueStep(
+            "Apply an update the phone already downloaded",
+            "If an OTA finished downloading before the phone broke, the signed zip is still in "
+            "/data/ota_package or /cache. HMD signed it, so recovery accepts it - and it is the "
+            "one legitimate route to a signed Nokia OTA, since HMD does not publish them. "
+            "'ptransfer nokia --apply-ota' finds and stages it.",
+            action="nokia-apply-ota",
+            applies_to=("recovery", "sideload", "online"),
         ),
         RescueStep(
             "Boot to recovery and wipe cache",
@@ -92,9 +112,9 @@ PROFILE = VendorProfile(
             action="reboot-recovery",
         ),
         RescueStep(
-            "Try the recovery menu's 'Reboot system now' after the cache wipe",
-            "If it boots, connect immediately and take a full backup with this app before doing "
-            "anything else. A phone that booted once may not boot twice.",
+            "The moment it boots, back it up",
+            "Connect immediately and take a full backup before doing anything else. A phone that "
+            "booted once may not boot twice.",
             action="backup-now",
         ),
         RescueStep(
@@ -111,9 +131,16 @@ PROFILE = VendorProfile(
         "the boot is the only route to the data.",
         "Do not unlock the bootloader to 'get in'. On a locked Nokia, unlocking triggers a mandatory "
         "wipe, and HMD stopped issuing unlock codes for most models anyway.",
+        "If the bootloader refuses to switch slots because it is locked, that is not a dead end: "
+        "after several failed boot attempts it falls back to the other slot on its own. Let the "
+        "phone try to boot a few more times before giving up on it.",
+        "Stock recovery writes the reason a boot or update failed to last_log, and it is readable "
+        "over adb from recovery. 'ptransfer nokia --logs' prints it. It is the most informative "
+        "thing on a phone that will not start, and almost nobody looks at it.",
     ),
     quirks={
-        "chipset-detect": "ro.board.platform starting with 'mt' means MediaTek, 'msm'/'sdm'/'sm' means Qualcomm.",
-        "ota-sideload": "HMD does not publish signed OTA zips publicly; recovery sideload is rarely usable.",
+        "chipset-detect": "ro.board.platform starting with 'mt' means MediaTek, 'msm'/'sdm'/'sm' means Qualcomm, 'ums'/'sp9' means Unisoc.",
+        "ota-sideload": "HMD does not publish signed OTA zips, but a package the phone downloaded itself is signed and still valid - look in /data/ota_package and /cache.",
+        "ab-slots": "Android One and later Nokias are A/B; slot switching is data-safe and is the highest-value repair after a failed update.",
     },
 )

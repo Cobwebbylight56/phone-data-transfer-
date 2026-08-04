@@ -93,6 +93,36 @@ class Fastboot:
         args = ["reboot"] + ([target] if target else [])
         return self.raw(args, serial, timeout=60)
 
+    # --- A/B slots ----------------------------------------------------
+    def slots(self, serial: str | None = None) -> "SlotInfo":
+        """Read the A/B slot state.
+
+        On a device with two system slots, a failed update leaves the new slot
+        unbootable while the *old* one still holds a working system. Switching
+        back is the most effective data-safe repair there is - it rewrites
+        nothing and touches userdata not at all.
+        """
+        vars_ = self.getvar_all(serial)
+        if not vars_:
+            # getvar all is refused by some bootloaders; ask for the few we need.
+            for name in ("slot-count", "current-slot"):
+                value = self.getvar(name, serial)
+                if value:
+                    vars_[name] = value
+            for slot in ("a", "b"):
+                for key in ("slot-successful", "slot-unbootable", "slot-retry-count"):
+                    value = self.getvar(f"{key}:{slot}", serial)
+                    if value:
+                        vars_[f"{key}:{slot}"] = value
+        return SlotInfo.from_vars(vars_)
+
+    def set_active(self, slot: str, serial: str | None = None) -> Result:
+        """Switch the active slot. Non-destructive: no partition is written."""
+        slot = slot.lower().lstrip("_")
+        if slot not in ("a", "b"):
+            raise ValueError("A slot is 'a' or 'b'.")
+        return self.raw(["set_active", slot], serial, timeout=60)
+
     def boot_image(
         self,
         image: str,
@@ -131,3 +161,76 @@ class Fastboot:
 
 
 DESTRUCTIVE_PARTITIONS = {"userdata", "data", "metadata", "persist", "fsg", "modemst1", "modemst2"}
+
+
+@dataclass
+class SlotInfo:
+    """State of an A/B device's two system slots."""
+
+    count: int = 0
+    current: str = ""
+    successful: dict[str, bool] = field(default_factory=dict)
+    unbootable: dict[str, bool] = field(default_factory=dict)
+    retry_count: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def is_ab(self) -> bool:
+        return self.count >= 2
+
+    @property
+    def other(self) -> str:
+        if not self.is_ab or self.current not in ("a", "b"):
+            return ""
+        return "b" if self.current == "a" else "a"
+
+    def looks_broken(self, slot: str) -> bool:
+        return self.unbootable.get(slot, False) or not self.successful.get(slot, True)
+
+    @property
+    def switch_is_promising(self) -> bool:
+        """True when the current slot is bad and the other one looks healthy."""
+        if not self.is_ab or not self.other:
+            return False
+        return self.looks_broken(self.current) and not self.looks_broken(self.other)
+
+    def describe(self) -> str:
+        if not self.is_ab:
+            return "This phone has a single system slot, so there is no slot to switch to."
+        bits = [f"Two system slots; currently booting from slot {self.current.upper() or '?'}."]
+        for slot in ("a", "b"):
+            if slot not in self.successful and slot not in self.unbootable:
+                continue
+            state = "unbootable" if self.unbootable.get(slot) else (
+                "marked good" if self.successful.get(slot) else "not yet marked good"
+            )
+            retries = self.retry_count.get(slot)
+            extra = f", {retries} boot attempts left" if retries is not None else ""
+            bits.append(f"  slot {slot.upper()}: {state}{extra}")
+        return "\n".join(bits)
+
+    @classmethod
+    def from_vars(cls, vars_: dict[str, str]) -> "SlotInfo":
+        def flag(name: str) -> bool:
+            return (vars_.get(name) or "").strip().lower() in ("yes", "true", "1")
+
+        info = cls()
+        try:
+            info.count = int((vars_.get("slot-count") or "0").strip())
+        except ValueError:
+            info.count = 0
+        info.current = (vars_.get("current-slot") or "").strip().lower().lstrip("_")
+        for slot in ("a", "b"):
+            if f"slot-successful:{slot}" in vars_:
+                info.successful[slot] = flag(f"slot-successful:{slot}")
+            if f"slot-unbootable:{slot}" in vars_:
+                info.unbootable[slot] = flag(f"slot-unbootable:{slot}")
+            raw = vars_.get(f"slot-retry-count:{slot}")
+            if raw:
+                try:
+                    info.retry_count[slot] = int(raw.strip())
+                except ValueError:
+                    pass
+        # Some bootloaders report has-slot:system instead of slot-count.
+        if not info.count and (vars_.get("has-slot:system") or "").lower() in ("yes", "true"):
+            info.count = 2
+        return info
