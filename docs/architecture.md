@@ -5,7 +5,7 @@ ptransfer_gui/           PySide6 window - pages + a thread pool, no logic of its
     app.py               entry point
     main_window.py       wires page signals to engine calls via Job
     worker.py            QRunnable that turns engine events into Qt signals
-    pages/               devices, backup, restore, rescue, guides
+    pages/               devices, backup, restore, screen, rescue, guides
 
 ptransfer/               the engine - pure stdlib, no Qt, importable and testable
     proc.py              subprocess wrapper + cancellation token
@@ -20,6 +20,8 @@ ptransfer/               the engine - pure stdlib, no Qt, importable and testabl
     restore.py           bundle -> phone
     recovery.py          diagnosis + rescue actions
     nokia.py             Nokia rescue: A/B slots, recovery-log analysis, on-device OTA
+    screen.py            screen capture + remote input (tap/swipe/type/unlock)
+    menu.py              the stock recovery menu, annotated with what each option costs
     oem/                 per-brand knowledge (nokia, sony, generic)
     progress.py          Event/Reporter shared by CLI and GUI
     cli.py               everything the GUI can do, scriptable
@@ -83,7 +85,19 @@ verification pass, and `test_missing_files_are_reported_as_partial` proves the p
 making a file genuinely unpullable rather than mocking the outcome.
 
 ```bash
-python -m pytest            # 129 tests, no hardware, no display
+python -m pytest            # 180 tests, no hardware, no display
 ```
 
-GUI tests run under `QT_QPA_PLATFORM=offscreen` and skip if PySide6 is absent.
+GUI tests run under `QT_QPA_PLATFORM=offscreen` and skip if PySide6 is absent. They build real
+widgets and assert on rendered output — which is how the `<file.zip>` escaping bug was caught:
+Qt's rich text was swallowing the filename as an unknown tag.
+
+## Two things the screen code has to get right
+
+**Binary output.** `screencap -p` returns a PNG, so it goes through `Runner.run_bytes`; the
+normal text path decodes as UTF-8 with replacement and destroys the image. There is also a
+CRLF-repair fallback for old builds whose shell rewrites `\n` on the way out.
+
+**Coordinates.** The view scales the phone's screenshot to fit, so a click has to be mapped
+back through that scale before `input tap` sees it — `map_to_device` does that and clamps to
+the panel, and a drag past a threshold becomes a swipe rather than a tap.

@@ -171,8 +171,56 @@ Output lands in `dist\PhoneDataTransfer\`.
 2. **Back up** — tick what you want, choose a folder, start. Leave it running; a full phone
    takes a while and it can be stopped and resumed.
 3. **Restore** — plug the *new* phone in, point it at the bundle.
-4. **Rescue** — for a phone that will not start.
-5. **Brand guides** — button combinations and vendor tools per brand.
+4. **Screen** — see the phone's display on the PC and drive it from there.
+5. **Rescue** — for a phone that will not start.
+6. **Brand guides** — button combinations and vendor tools per brand.
+
+### Screen mirroring and typing
+
+The Screen tab shows the phone's display and lets you drive it from the PC:
+
+- **Click to tap, drag to swipe**, type on your keyboard to send keystrokes
+- **Phone buttons** — Back, Home, Recents, Power, Volume, Wake
+- **Unlock** — wakes the phone, dismisses the lock screen and enters your PIN or password
+- **Save screenshot**, and an **Open in scrcpy** button when scrcpy is installed (much
+  smoother; the built-in view refreshes a few times a second)
+
+```powershell
+ptransfer screen --shot screen.png
+ptransfer screen --tap 540 1200
+ptransfer screen --text "hello"
+ptransfer screen --unlock          # prompts for the passcode, never echoes it
+```
+
+Two honest limits:
+
+**The passcode field is not a lock-screen bypass.** It only works on a phone that has already
+authorised this computer for USB debugging — and granting that requires physically unlocking
+the phone and accepting the prompt. It's a convenience for a phone you've already unlocked
+once. Nothing in the app tries more than one passcode, by design.
+
+**A bricked phone has no screen to mirror.** Both capture and input need Android itself
+running. A phone in recovery or fastboot has neither, so mirroring is unavailable there — the
+app says so and points you at the recovery menu helper instead.
+
+### The recovery menu helper
+
+Recovery is the one screen that can't be mirrored, so the app explains it instead. When a
+phone in recovery is detected, the Rescue tab shows the annotated menu; from the command line:
+
+```powershell
+ptransfer rescue --menu
+```
+
+It covers the button navigation (Volume Up/Down to move, Power to select, and the
+hold-Power-then-Volume-Up trick for the "No command" droid), the safe sequence to work
+through, and what every option actually costs you.
+
+**One correction to the guides you'll find elsewhere.** Nearly all of them end with "if the
+cache wipe doesn't work, do a factory reset". That's right if you want a working phone and
+don't need what's on it. It's the wrong move if you're trying to save your data: the reset
+discards the encryption key, so afterwards nothing — no tool, no paid recovery service — can
+get your photos or messages back. The app marks those entries in red and says so.
 
 ### The command line
 

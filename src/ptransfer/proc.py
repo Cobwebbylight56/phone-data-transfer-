@@ -83,6 +83,26 @@ class Runner:
             )
         return Result(args, proc.returncode, proc.stdout or "", proc.stderr or "")
 
+    def run_bytes(self, args: Sequence[str], timeout: float | None = 30.0) -> tuple[int, bytes]:
+        """Run a command and return stdout as raw bytes.
+
+        Needed for anything binary - ``screencap -p`` emits a PNG, and decoding
+        it as text mangles it beyond recovery.
+        """
+        log.debug("run_bytes: %s", " ".join(args))
+        try:
+            proc = subprocess.run(
+                list(args),
+                capture_output=True,
+                timeout=timeout,
+                creationflags=_NO_WINDOW,
+            )
+        except FileNotFoundError as exc:
+            raise ToolError(f"{args[0]!r} not found on PATH") from exc
+        except subprocess.TimeoutExpired:
+            return -1, b""
+        return proc.returncode, proc.stdout or b""
+
     def stream(
         self,
         args: Sequence[str],
@@ -159,6 +179,7 @@ class FakeRunner(Runner):
     responses: dict[str, Result] = field(default_factory=dict)
     calls: list[list[str]] = field(default_factory=list)
     default: Result | None = None
+    binary_responses: dict[str, bytes] = field(default_factory=dict)
 
     def key(self, args: Iterable[str]) -> str:
         return " ".join(args)
@@ -180,6 +201,14 @@ class FakeRunner(Runner):
         for line in res.stdout.splitlines():
             on_line(line)
         return res
+
+    def run_bytes(self, args, timeout=30.0) -> tuple[int, bytes]:  # type: ignore[override]
+        self.calls.append(list(args))
+        k = self.key(args)
+        for prefix, data in self.binary_responses.items():
+            if k == prefix or k.startswith(prefix):
+                return 0, data
+        return 1, b""
 
 
 def _decode(value) -> str:

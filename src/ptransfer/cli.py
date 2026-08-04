@@ -7,6 +7,7 @@ makes the engine testable without Qt.
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import sys
 from pathlib import Path
@@ -16,6 +17,7 @@ from .backup import SECTIONS, BackupEngine, BackupOptions
 from .devices import Device, DeviceManager, State
 from .logging_setup import setup_logging
 from .manifest import Bundle, safe_bundle_name
+from .menu import as_text as menu_as_text
 from .nokia import OTA_SEARCH_DIRS, NokiaRescue, is_nokia
 from .oem import ALL_PROFILES, profile_for
 from .platform_tools import download_platform_tools, discover, user_data_dir
@@ -23,6 +25,7 @@ from .proc import Cancel, ToolError
 from .progress import Event, Reporter, human_bytes
 from .recovery import RescueEngine, diagnose
 from .restore import RestoreEngine, RestoreOptions
+from .screen import PhoneScreen, ScreenUnavailable
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +122,17 @@ def build_parser() -> argparse.ArgumentParser:
     rescue.add_argument("--extract", metavar="DIR", help="try to copy storage out of recovery mode")
     rescue.add_argument("--sideload", metavar="ZIP", help="apply a signed OTA zip from recovery")
     rescue.add_argument("--restart-adb", action="store_true", help="restart the adb server and rescan")
+    rescue.add_argument("--menu", action="store_true",
+                        help="explain the recovery menu on the phone's screen and what each option costs")
+
+    sc = sub.add_parser("screen", help="see the phone's screen and control it from here")
+    sc.add_argument("--shot", metavar="FILE", help="save one screenshot and exit")
+    sc.add_argument("--tap", nargs=2, type=int, metavar=("X", "Y"), help="tap a point")
+    sc.add_argument("--swipe", nargs=4, type=int, metavar=("X1", "Y1", "X2", "Y2"), help="swipe")
+    sc.add_argument("--key", help="send a key: home, back, power, enter, volume_up ...")
+    sc.add_argument("--text", help="type text on the phone")
+    sc.add_argument("--unlock", action="store_true",
+                    help="wake, dismiss the lock screen and enter a passcode (prompted, not echoed)")
 
     n = sub.add_parser("nokia", help="Nokia-specific rescue: slot switching, log analysis, on-device OTA")
     n.add_argument("--switch-slot", nargs="?", const="", metavar="A|B",
@@ -149,6 +163,11 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_guide(args)
     if args.command == "verify":
         return cmd_verify(args)
+    # The recovery-menu explainer is just text - someone reading it is looking
+    # at a phone that adb cannot reach anyway.
+    if args.command == "rescue" and args.menu:
+        _line(menu_as_text())
+        return 0
 
     manager = DeviceManager()
     ready, message = manager.tools_ready()
@@ -165,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         "rescue": cmd_rescue,
         "reboot": cmd_reboot,
         "nokia": cmd_nokia,
+        "screen": cmd_screen,
     }
     try:
         return handlers[args.command](args, manager)
@@ -318,6 +338,10 @@ def cmd_verify(args) -> int:
 
 
 def cmd_rescue(args, manager: DeviceManager) -> int:
+    if args.menu:
+        _line(menu_as_text())
+        return 0
+
     reporter = Reporter(console_sink(args.verbose))
     engine = RescueEngine(manager, reporter, Cancel())
 
@@ -348,6 +372,60 @@ def cmd_rescue(args, manager: DeviceManager) -> int:
             return 1
         _line("")
         _line(engine.sideload(result.device, args.sideload))
+    return 0
+
+
+def cmd_screen(args, manager: DeviceManager) -> int:
+    device = _select(manager, args.serial)
+    if device is None:
+        return 1
+    try:
+        PhoneScreen.check_supported(device)
+    except ScreenUnavailable as exc:
+        _line(str(exc))
+        return 1
+
+    screen = PhoneScreen(manager.adb, device.serial or None)
+
+    if args.shot:
+        try:
+            frame = screen.capture()
+        except ScreenUnavailable as exc:
+            _line(str(exc))
+            return 1
+        Path(args.shot).write_bytes(frame.png)
+        _line(f"Saved {args.shot} ({frame.width}x{frame.height})")
+        return 0
+
+    did_something = False
+    if args.tap:
+        did_something = True
+        _line("tapped" if screen.tap(*args.tap) else "tap failed")
+    if args.swipe:
+        did_something = True
+        _line("swiped" if screen.swipe(*args.swipe) else "swipe failed")
+    if args.key:
+        did_something = True
+        _line("sent" if screen.key(args.key) else "key failed")
+    if args.text:
+        did_something = True
+        _line("typed" if screen.type_text(args.text) else "typing failed")
+    if args.unlock:
+        did_something = True
+        # Prompted rather than passed as an argument, so it stays out of the
+        # shell history and the process list.
+        code = getpass.getpass("Passcode (not shown): ")
+        _line(screen.unlock(code, code.isdigit()))
+
+    if not did_something:
+        size = screen.size()
+        _line(f"{device.label}: screen is {size.width}x{size.height}")
+        locked = screen.is_locked()
+        if locked is not None:
+            _line("Lock screen is " + ("up" if locked else "not showing"))
+        _line("")
+        _line("Use --shot, --tap, --swipe, --key, --text or --unlock.")
+        _line("For a live view, run 'ptransfer gui' and open the Screen tab.")
     return 0
 
 

@@ -7,6 +7,8 @@ Someone using this screen is stressed and about to make an irreversible choice.
 
 from __future__ import annotations
 
+from html import escape as esc
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
@@ -20,6 +22,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ptransfer.devices import State
+from ptransfer.menu import MENU, NAVIGATION, SAFE_ORDER
+from ptransfer.menu import entry as menu_entry
 from ptransfer.oem import ALL_PROFILES
 from ptransfer.progress import Event
 from ptransfer.recovery import Diagnosis
@@ -137,25 +142,71 @@ class RescuePage(QWidget):
         )
         self.report.setHtml(self._render(diagnosis))
 
+    def _render_recovery_menu(self) -> str:
+        """The recovery menu, annotated - the one screen we cannot mirror."""
+        html = [
+            "<h4>You are looking at the recovery menu</h4>",
+            "<p>The touchscreen does nothing here. Use the physical buttons:</p><ul>",
+        ]
+        for line in NAVIGATION:
+            html.append(f"<li>{esc(line)}</li>")
+        html.append("</ul>")
+
+        html.append("<p><b>Work through these, in order:</b></p><ol>")
+        for label in SAFE_ORDER:
+            e = menu_entry(label)
+            advice = f"<br><i>{esc(e.advice)}</i>" if e and e.advice else ""
+            html.append(f"<li><b>{esc(label)}</b>{advice}</li>")
+        html.append("</ol>")
+
+        html.append("<p><b>Every option, and what it costs you:</b></p><ul>")
+        for e in MENU:
+            if e.destroys_data:
+                html.append(
+                    f"<li><span style='color:#cf222e'><b>{esc(e.label)} — ERASES EVERYTHING</b></span>"
+                    f"<br>{esc(e.does)}<br><i>{esc(e.advice)}</i></li>"
+                )
+            else:
+                html.append(
+                    f"<li><span style='color:#1a7f37'><b>{esc(e.label)}</b></span> — {esc(e.does)}"
+                    + (f"<br><i>{esc(e.advice)}</i>" if e.advice else "")
+                    + "</li>"
+                )
+        html.append("</ul>")
+        html.append(
+            "<p style='color:#cf222e'><b>A word about the advice you will find elsewhere.</b> "
+            "Nearly every walkthrough ends with 'if the cache wipe does not work, do a factory "
+            "reset'. That is right if you want a working phone and do not need what is on it. It "
+            "is the wrong move here: the reset discards the encryption key, so afterwards no tool "
+            "and no recovery service can get your photos or messages back. Exhaust the safe "
+            "options first.</p>"
+        )
+        return "".join(html)
+
     def _render(self, d: Diagnosis) -> str:
         html: list[str] = []
         if d.warnings:
             html.append("<div style='color:#cf222e'>")
             for w in d.warnings:
-                html.append(f"<p><b>Warning:</b> {w}</p>")
+                html.append(f"<p><b>Warning:</b> {esc(w)}</p>")
             html.append("</div>")
 
         html.append("<h4>What to do, in order</h4><ol>")
         for step in d.steps:
             flag = " <span style='color:#cf222e'><b>[ERASES YOUR DATA]</b></span>" if step.warns else ""
-            html.append(f"<li><b>{step.title}</b>{flag}<br>{step.detail}</li>")
+            html.append(f"<li><b>{esc(step.title)}</b>{flag}<br>{esc(step.detail)}</li>")
         html.append("</ol>")
 
+        # When the phone is sitting in recovery, what is on its screen right
+        # now matters more than anything else we could show.
+        if d.device is not None and d.device.state in (State.RECOVERY, State.SIDELOAD):
+            html.append(self._render_recovery_menu())
+
         if d.profile.key_combos:
-            html.append(f"<h4>Button combinations — {d.profile.display_name}</h4><ul>")
+            html.append(f"<h4>Button combinations — {esc(d.profile.display_name)}</h4><ul>")
             for c in d.profile.key_combos:
-                note = f"<br><i>{c.note}</i>" if c.note else ""
-                html.append(f"<li><b>{c.mode}</b>: {c.steps}{note}</li>")
+                note = f"<br><i>{esc(c.note)}</i>" if c.note else ""
+                html.append(f"<li><b>{esc(c.mode)}</b>: {esc(c.steps)}{note}</li>")
             html.append("</ul>")
 
         if d.profile.tools:
@@ -163,17 +214,18 @@ class RescuePage(QWidget):
             for t in d.profile.tools:
                 colour = {"safe": "#1a7f37", "usually": "#9a6700", "wipes": "#cf222e"}[t.data_safety.value]
                 tag = {"safe": "data-safe", "usually": "usually keeps data", "wipes": "ERASES DATA"}[t.data_safety.value]
-                url = f"<br><a href='{t.url}'>{t.url}</a>" if t.url else ""
-                note = f"<br><i>{t.note}</i>" if t.note else ""
+                url = f"<br><a href='{esc(t.url)}'>{esc(t.url)}</a>" if t.url else ""
+                note = f"<br><i>{esc(t.note)}</i>" if t.note else ""
                 html.append(
-                    f"<li><b>{t.name}</b> <span style='color:{colour}'>[{tag}]</span><br>{t.purpose}{url}{note}</li>"
+                    f"<li><b>{esc(t.name)}</b> <span style='color:{colour}'>[{tag}]</span>"
+                    f"<br>{esc(t.purpose)}{url}{note}</li>"
                 )
             html.append("</ul>")
 
         if d.profile.notes:
             html.append("<h4>Worth knowing</h4><ul>")
             for n in d.profile.notes:
-                html.append(f"<li>{n}</li>")
+                html.append(f"<li>{esc(n)}</li>")
             html.append("</ul>")
         return "".join(html)
 

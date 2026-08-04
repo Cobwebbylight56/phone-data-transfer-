@@ -176,3 +176,125 @@ def test_nokia_rescue_plan_names_the_slot_switch(app):
     page.show_diagnosis(diagnose([Device(serial="S", state=State.BOOTLOADER, manufacturer="HMD Global")]))
     html = page.report.toHtml()
     assert "slot" in html.lower()
+
+
+def test_screen_page_refuses_a_phone_in_recovery(app):
+    from ptransfer_gui.pages.screen_page import ScreenPage
+
+    page = ScreenPage()
+    page.set_device(Device(serial="S", state=State.RECOVERY))
+
+    assert not page.connect_button.isEnabled()
+    assert "physical buttons" in page.status.text()
+
+
+def test_screen_page_enables_for_a_booted_phone(app):
+    from ptransfer_gui.pages.screen_page import ScreenPage
+
+    page = ScreenPage()
+    page.set_device(Device(serial="S", state=State.ONLINE, manufacturer="HMD Global", model="Nokia 8.3"))
+    assert page.connect_button.isEnabled()
+    assert "Nokia 8.3" in page.hint.text()
+
+
+def test_screen_view_turns_a_click_into_a_tap(app):
+    from PySide6.QtCore import QPoint
+    from ptransfer_gui.pages.screen_page import ScreenView
+
+    view = ScreenView()
+    view.device_size = (1080, 2340)
+    view._pixmap_rect = (0, 0, 300, 650)
+
+    taps: list[tuple] = []
+    view.tapped.connect(lambda x, y: taps.append((x, y)))
+    view._press = QPoint(150, 325)
+
+    class E:
+        def pos(self):
+            return QPoint(150, 325)
+
+    view.mouseReleaseEvent(E())
+    assert taps == [(540, 1170)]
+
+
+def test_screen_view_turns_a_drag_into_a_swipe(app):
+    from PySide6.QtCore import QPoint
+    from ptransfer_gui.pages.screen_page import ScreenView
+
+    view = ScreenView()
+    view.device_size = (1000, 2000)
+    view._pixmap_rect = (0, 0, 100, 200)
+
+    swipes: list[tuple] = []
+    view.swiped.connect(lambda *a: swipes.append(a))
+    view._press = QPoint(50, 180)
+
+    class E:
+        def pos(self):
+            return QPoint(50, 20)
+
+    view.mouseReleaseEvent(E())
+    assert swipes == [(500, 1800, 500, 200)]
+
+
+def test_passcode_field_is_masked_and_cleared_after_use(app):
+    from PySide6.QtWidgets import QLineEdit
+    from ptransfer_gui.pages.screen_page import ScreenPage
+
+    page = ScreenPage()
+    assert page.passcode.echoMode() == QLineEdit.EchoMode.Password
+
+    sent: list[tuple] = []
+    page.unlock_requested.connect(lambda c, n: sent.append((c, n)))
+    page.passcode.setText("1234")
+    page._unlock()
+
+    assert sent == [("1234", True)]
+    assert page.passcode.text() == ""  # never left on screen
+
+
+def test_recovery_menu_panel_appears_for_a_phone_in_recovery(app):
+    from ptransfer_gui.pages.rescue_page import RescuePage
+
+    page = RescuePage()
+    page.show_diagnosis(diagnose([Device(serial="S", state=State.RECOVERY, manufacturer="HMD Global")]))
+    html = page.report.toHtml()
+
+    assert "recovery menu" in html.lower()
+    assert "Volume Up" in html
+    assert "ERASES EVERYTHING" in html
+    assert "factory reset" in html.lower()
+
+
+def test_recovery_menu_panel_is_absent_in_fastboot(app):
+    from ptransfer_gui.pages.rescue_page import RescuePage
+
+    page = RescuePage()
+    page.show_diagnosis(diagnose([Device(serial="S", state=State.BOOTLOADER, manufacturer="HMD Global")]))
+    assert "You are looking at the recovery menu" not in page.report.toHtml()
+
+
+def test_angle_brackets_in_advice_survive_the_html_render(app):
+    """A filename like <file.zip> must not be swallowed as an HTML tag."""
+    from ptransfer.menu import entry
+    from ptransfer_gui.pages.rescue_page import RescuePage
+
+    advice = entry("Apply update from ADB").advice
+    assert "<file.zip>" in advice  # the source text really does contain one
+
+    page = RescuePage()
+    page.show_diagnosis(diagnose([Device(serial="S", state=State.RECOVERY, manufacturer="HMD Global")]))
+    text = page.report.toPlainText()
+    assert "--sideload <file.zip>" in text
+
+
+def test_guide_page_renders_the_nokia_rescue_steps(app):
+    from ptransfer_gui.pages.guide_page import GuidePage
+
+    page = GuidePage()
+    page.select_brand("nokia")
+    text = page.view.toPlainText()
+
+    assert "Nokia (HMD Global)" in text
+    assert "Switch to the other system slot" in text
+    assert "Volume Up" in text

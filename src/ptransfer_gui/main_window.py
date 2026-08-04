@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import QThreadPool, Qt, QTimer
@@ -28,17 +29,19 @@ from ptransfer.platform_tools import download_platform_tools, discover
 from ptransfer.progress import Event, Reporter
 from ptransfer.recovery import RescueEngine, diagnose
 from ptransfer.restore import RestoreEngine, RestoreOptions
+from ptransfer.screen import PhoneScreen, ScreenUnavailable, scrcpy_path
 
 from .pages.backup_page import BackupPage
 from .pages.devices_page import DevicesPage
 from .pages.guide_page import GuidePage
 from .pages.rescue_page import RescuePage
 from .pages.restore_page import RestorePage
+from .pages.screen_page import FrameStreamer, ScreenPage
 from .worker import Job
 
 log = logging.getLogger(__name__)
 
-PAGES = ["Phones", "Back up", "Restore", "Rescue", "Brand guides"]
+PAGES = ["Phones", "Back up", "Restore", "Screen", "Rescue", "Brand guides"]
 
 
 class MainWindow(QMainWindow):
@@ -54,6 +57,8 @@ class MainWindow(QMainWindow):
         # Building the window must not start background work; the first scan is
         # kicked off by _first_run_check once there is an event loop to run it.
         self._ready = False
+        self.phone_screen: PhoneScreen | None = None
+        self.streamer: FrameStreamer | None = None
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -69,9 +74,17 @@ class MainWindow(QMainWindow):
         self.devices_page = DevicesPage()
         self.backup_page = BackupPage()
         self.restore_page = RestorePage()
+        self.screen_page = ScreenPage()
         self.rescue_page = RescuePage()
         self.guide_page = GuidePage()
-        for page in (self.devices_page, self.backup_page, self.restore_page, self.rescue_page, self.guide_page):
+        for page in (
+            self.devices_page,
+            self.backup_page,
+            self.restore_page,
+            self.screen_page,
+            self.rescue_page,
+            self.guide_page,
+        ):
             self.stack.addWidget(page)
         right.addWidget(self.stack)
         layout.addLayout(right, 1)
@@ -102,6 +115,17 @@ class MainWindow(QMainWindow):
         self.rescue_page.restart_adb_requested.connect(self.do_restart_adb)
         self.rescue_page.nokia_requested.connect(self.run_nokia_action)
 
+        self.screen_page.start_requested.connect(self.start_mirroring)
+        self.screen_page.stop_requested.connect(self.stop_mirroring)
+        self.screen_page.tap_requested.connect(lambda x, y: self._screen_do(lambda s: s.tap(x, y)))
+        self.screen_page.swipe_requested.connect(
+            lambda x1, y1, x2, y2: self._screen_do(lambda s: s.swipe(x1, y1, x2, y2))
+        )
+        self.screen_page.key_requested.connect(lambda k: self._screen_do(lambda s: s.key(k)))
+        self.screen_page.text_requested.connect(lambda t: self._screen_do(lambda s: s.type_text(t)))
+        self.screen_page.unlock_requested.connect(self.do_unlock)
+        self.screen_page.scrcpy_button.clicked.connect(self.launch_scrcpy)
+
     def _switch_page(self, row: int) -> None:
         self.stack.setCurrentIndex(row)
         if row == 0 and self._ready:
@@ -111,6 +135,7 @@ class MainWindow(QMainWindow):
         self.selected = device
         self.backup_page.set_device(device)
         self.restore_page.set_device(device)
+        self.screen_page.set_device(device)
 
     # --- startup ------------------------------------------------------
     def _first_run_check(self) -> None:
@@ -262,6 +287,77 @@ class MainWindow(QMainWindow):
 
         self._run(work, done, page=self.rescue_page)
 
+    # --- screen mirroring ---------------------------------------------
+    def start_mirroring(self, device: Device) -> None:
+        try:
+            PhoneScreen.check_supported(device)
+        except ScreenUnavailable as exc:
+            self.screen_page.show_error(str(exc))
+            return
+
+        self.phone_screen = PhoneScreen(self.manager.adb, device.serial or None)
+        interval = 150 if self.screen_page.smooth_check.isChecked() else 400
+        self.streamer = FrameStreamer(self.phone_screen, interval)
+        self.streamer.frame.connect(self.screen_page.show_frame)
+        self.streamer.failed.connect(self._mirroring_failed)
+        self.streamer.start()
+        self.screen_page.set_streaming(True)
+        self.screen_page.show_status("Mirroring. Click to tap, drag to swipe, type to send keys.")
+
+    def stop_mirroring(self) -> None:
+        if self.streamer is not None:
+            self.streamer.stop()
+            self.streamer.wait(2000)
+            self.streamer = None
+        self.screen_page.set_streaming(False)
+        self.screen_page.show_status("Stopped.")
+
+    def _mirroring_failed(self, message: str) -> None:
+        self.stop_mirroring()
+        self.screen_page.show_error(message)
+
+    def launch_scrcpy(self) -> None:
+        """Hand off to scrcpy, which mirrors at full frame rate."""
+        path = scrcpy_path()
+        if path is None:
+            QMessageBox.information(
+                self,
+                "scrcpy not installed",
+                "scrcpy gives a much smoother mirror than the built-in view. Install it and "
+                "restart this app to enable this button.",
+            )
+            return
+        args = [path]
+        if self.selected is not None and self.selected.serial:
+            args += ["-s", self.selected.serial]
+        try:
+            subprocess.Popen(args)
+        except OSError as exc:
+            QMessageBox.warning(self, "Could not start scrcpy", str(exc))
+            return
+        self.screen_page.show_status("scrcpy launched in its own window.")
+
+    def _screen_do(self, action) -> None:
+        """Fire one input action at the phone, off the UI thread."""
+        if self.phone_screen is None:
+            self.screen_page.show_error("Start mirroring first.")
+            return
+
+        def work(reporter: Reporter, cancel):
+            return action(self.phone_screen)
+
+        self._run(work, lambda ok: None)
+
+    def do_unlock(self, credential: str, numeric: bool) -> None:
+        if self.phone_screen is None:
+            self.screen_page.show_error("Start mirroring first.")
+            return
+
+        def work(reporter: Reporter, cancel):
+            return self.phone_screen.unlock(credential, numeric)
+
+        self._run(work, self.screen_page.show_status)
+
     def run_nokia_action(self, device: Device, action: str) -> None:
         def work(reporter: Reporter, cancel):
             rescue = NokiaRescue(self.manager, reporter, cancel)
@@ -312,6 +408,8 @@ class MainWindow(QMainWindow):
 
     # --- window -------------------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self.streamer is not None:
+            self.stop_mirroring()
         if self.current_job is not None:
             answer = QMessageBox.question(
                 self,
