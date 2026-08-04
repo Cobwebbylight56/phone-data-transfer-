@@ -298,4 +298,17 @@ def map_to_device(
 
 def scrcpy_path() -> str | None:
     """scrcpy gives a far smoother mirror; use it when it is installed."""
-    return shutil.which("scrcpy")
+    from .platform_tools import find_scrcpy
+
+    return find_scrcpy()
+
+
+SECURE_SCREEN_HINT = (
+    "The picture is black because Android refuses to screenshot this screen. The lock screen "
+    "keypad is marked secure, and so are banking apps and video services - screencap returns "
+    "black rather than the contents.\n\n"
+    "You can still type your PIN: put it in the box below and press Unlock. The keystrokes "
+    "arrive even though you cannot see the keypad.\n\n"
+    "To actually see the lock screen, use scrcpy - it mirrors the display itself instead of "
+    "asking for a screenshot, so secure screens come through. Press 'Get scrcpy' to install it."
+)

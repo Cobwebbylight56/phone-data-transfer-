@@ -25,7 +25,7 @@ from ptransfer.backup import BackupEngine, BackupOptions
 from ptransfer.devices import Device, DeviceManager
 from ptransfer.logging_setup import log_file
 from ptransfer.nokia import NokiaRescue
-from ptransfer.platform_tools import download_platform_tools, discover
+from ptransfer.platform_tools import discover, download_platform_tools, download_scrcpy
 from ptransfer.progress import Event, Reporter
 from ptransfer.recovery import RescueEngine, diagnose
 from ptransfer.restore import RestoreEngine, RestoreOptions
@@ -125,6 +125,7 @@ class MainWindow(QMainWindow):
         self.screen_page.text_requested.connect(lambda t: self._screen_do(lambda s: s.type_text(t)))
         self.screen_page.unlock_requested.connect(self.do_unlock)
         self.screen_page.scrcpy_button.clicked.connect(self.launch_scrcpy)
+        self.screen_page.get_scrcpy_button.clicked.connect(self.install_scrcpy)
 
     def _switch_page(self, row: int) -> None:
         self.stack.setCurrentIndex(row)
@@ -316,6 +317,20 @@ class MainWindow(QMainWindow):
         self.stop_mirroring()
         self.screen_page.show_error(message)
 
+    def install_scrcpy(self) -> None:
+        """Download scrcpy - the only way to see a secure screen like the keypad."""
+
+        def work(reporter: Reporter, cancel):
+            reporter.status("Downloading scrcpy…")
+            return str(download_scrcpy(progress=lambda f: reporter.progress(f, "downloading scrcpy")))
+
+        def done(where: str) -> None:
+            self.screen_page.refresh_scrcpy_state()
+            self.screen_page.show_status(f"scrcpy installed to {where}. Press 'Open in scrcpy'.")
+
+        self.screen_page.show_status("Fetching scrcpy…")
+        self._run(work, done, page=self.screen_page)
+
     def launch_scrcpy(self) -> None:
         """Hand off to scrcpy, which mirrors at full frame rate."""
         path = scrcpy_path()
@@ -337,26 +352,39 @@ class MainWindow(QMainWindow):
             return
         self.screen_page.show_status("scrcpy launched in its own window.")
 
+    def _fire(self, fn, on_done=None) -> None:
+        """Run a short action without taking the single-job slot.
+
+        Taps and keystrokes arrive far faster than one at a time, and routing
+        them through _run made a second tap pop a 'Busy' dialog.
+        """
+        job = Job(lambda reporter, cancel: fn())
+        if on_done is not None:
+            job.signals.finished.connect(on_done)
+        job.signals.failed.connect(
+            lambda message: self.screen_page.show_error(message.splitlines()[0][:160])
+        )
+        self.pool.start(job)
+
     def _screen_do(self, action) -> None:
         """Fire one input action at the phone, off the UI thread."""
         if self.phone_screen is None:
             self.screen_page.show_error("Start mirroring first.")
             return
-
-        def work(reporter: Reporter, cancel):
-            return action(self.phone_screen)
-
-        self._run(work, lambda ok: None)
+        self._fire(lambda: action(self.phone_screen))
 
     def do_unlock(self, credential: str, numeric: bool) -> None:
         if self.phone_screen is None:
-            self.screen_page.show_error("Start mirroring first.")
+            self.screen_page.show_error(
+                "Start mirroring first - the unlock box talks to the phone through the same "
+                "connection."
+            )
             return
-
-        def work(reporter: Reporter, cancel):
-            return self.phone_screen.unlock(credential, numeric)
-
-        self._run(work, self.screen_page.show_status)
+        self.screen_page.show_status("Sending the passcode…")
+        self._fire(
+            lambda: self.phone_screen.unlock(credential, numeric),
+            self.screen_page.show_status,
+        )
 
     def run_nokia_action(self, device: Device, action: str) -> None:
         def work(reporter: Reporter, cancel):

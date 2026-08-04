@@ -298,3 +298,97 @@ def test_guide_page_renders_the_nokia_rescue_steps(app):
     assert "Nokia (HMD Global)" in text
     assert "Switch to the other system slot" in text
     assert "Volume Up" in text
+
+
+# --- secure (black) screens -------------------------------------------
+def _solid(colour: str, w: int = 200, h: int = 400):
+    from PySide6.QtGui import QColor, QImage
+
+    img = QImage(w, h, QImage.Format.Format_RGB32)
+    img.fill(QColor(colour))
+    return img
+
+
+def _png(image) -> bytes:
+    from PySide6.QtCore import QBuffer
+
+    buf = QBuffer()
+    buf.open(QBuffer.OpenModeFlag.WriteOnly)
+    image.save(buf, "PNG")
+    return bytes(buf.data())
+
+
+def test_black_frame_is_recognised_as_a_secure_screen(app):
+    from ptransfer_gui.pages.screen_page import is_mostly_black
+
+    assert is_mostly_black(_solid("#000000"))
+    assert is_mostly_black(_solid("#050505"))     # not quite black, still blank
+    assert not is_mostly_black(_solid("#0d1b2a")) # a dark wallpaper is not blank
+    assert not is_mostly_black(_solid("#ffffff"))
+
+
+def test_a_lock_screen_keypad_explains_itself_instead_of_showing_black(app):
+    from ptransfer_gui.pages.screen_page import ScreenPage
+
+    page = ScreenPage()
+    page.show_frame(_png(_solid("#000000")), 200, 400)
+
+    assert page.secure_notice.isVisibleTo(page)
+    text = page.secure_notice.text()
+    assert "refuses to screenshot" in text
+    assert "type your pin" in text.lower()
+    assert "scrcpy" in text
+
+
+def test_the_notice_goes_away_on_a_normal_screen(app):
+    from ptransfer_gui.pages.screen_page import ScreenPage
+
+    page = ScreenPage()
+    page.show_frame(_png(_solid("#000000")), 200, 400)
+    assert page.secure_notice.isVisibleTo(page)
+
+    page.show_frame(_png(_solid("#3a6ea5")), 200, 400)
+    assert not page.secure_notice.isVisibleTo(page)
+
+
+def test_get_scrcpy_button_appears_only_when_scrcpy_is_missing(app, monkeypatch):
+    from ptransfer_gui.pages import screen_page as sp
+
+    monkeypatch.setattr(sp, "scrcpy_path", lambda: None)
+    page = sp.ScreenPage()
+    assert page.get_scrcpy_button.isVisibleTo(page)
+    assert not page.scrcpy_button.isEnabled()
+
+    monkeypatch.setattr(sp, "scrcpy_path", lambda: "C:/scrcpy/scrcpy.exe")
+    page.refresh_scrcpy_state()
+    assert not page.get_scrcpy_button.isVisibleTo(page)
+    assert page.scrcpy_button.isEnabled()
+
+
+def test_rapid_taps_do_not_hit_the_busy_gate(app, monkeypatch):
+    """Two taps in a row must both go through, not raise a Busy dialog."""
+    monkeypatch.setattr("ptransfer.devices.enumerate_usb", lambda runner=None: [])
+    from ptransfer_gui.main_window import MainWindow
+
+    window = MainWindow()
+    busy: list[str] = []
+    monkeypatch.setattr(
+        "ptransfer_gui.main_window.QMessageBox.information",
+        lambda *a, **k: busy.append("shown"),
+    )
+
+    taps: list[tuple] = []
+
+    class FakeScreen:
+        def tap(self, x, y):
+            taps.append((x, y))
+            return True
+
+    window.phone_screen = FakeScreen()
+    window._screen_do(lambda s: s.tap(1, 2))
+    window._screen_do(lambda s: s.tap(3, 4))
+    window.pool.waitForDone(3000)
+
+    assert busy == []            # no "Busy" popup
+    assert sorted(taps) == [(1, 2), (3, 4)]
+    window.close()

@@ -96,6 +96,85 @@ def discover() -> Tools:
     return Tools(adb or "", fastboot or "", adb_src if adb else fb_src)
 
 
+SCRCPY_RELEASES_API = "https://api.github.com/repos/Genymobile/scrcpy/releases/latest"
+
+
+def find_scrcpy() -> str | None:
+    """Locate scrcpy: bundled, downloaded, or on PATH.
+
+    Worth having because scrcpy mirrors the display itself rather than asking
+    for a screenshot, so it shows the lock screen - which ``screencap`` returns
+    as a black rectangle.
+    """
+    override = os.environ.get("PTRANSFER_SCRCPY")
+    if override and Path(override).exists():
+        return override
+
+    for base in (*_candidate_dirs(), user_data_dir() / "scrcpy"):
+        direct = base / exe("scrcpy")
+        if direct.exists():
+            return str(direct)
+        # The release zip unpacks into a versioned folder.
+        if base.exists():
+            for child in sorted(base.glob("scrcpy*")):
+                candidate = child / exe("scrcpy")
+                if candidate.exists():
+                    return str(candidate)
+
+    return shutil.which("scrcpy")
+
+
+def download_scrcpy(dest: str | os.PathLike | None = None, progress=None) -> Path:
+    """Fetch the current scrcpy release for this platform and unpack it.
+
+    Returns the directory holding the scrcpy executable.
+    """
+    import json
+    import urllib.request
+
+    if not is_windows():  # pragma: no cover - packaged builds only ship Windows
+        raise RuntimeError(
+            "Automatic scrcpy download is only wired up for Windows. Install it with your "
+            "package manager instead (e.g. 'apt install scrcpy' or 'brew install scrcpy')."
+        )
+
+    dest = Path(dest) if dest is not None else user_data_dir() / "scrcpy"
+    dest.mkdir(parents=True, exist_ok=True)
+
+    log.info("Looking up the latest scrcpy release")
+    request = urllib.request.Request(
+        SCRCPY_RELEASES_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "ptransfer"}
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        release = json.loads(response.read().decode("utf-8"))
+
+    url = ""
+    for asset in release.get("assets", []):
+        name = (asset.get("name") or "").lower()
+        if name.endswith(".zip") and "win64" in name:
+            url = asset.get("browser_download_url", "")
+            break
+    if not url:
+        raise RuntimeError("No Windows build found in the latest scrcpy release.")
+
+    def _hook(count, block, total):
+        if progress and total > 0:
+            progress(min(1.0, count * block / total))
+
+    zip_path = dest / "scrcpy.zip"
+    log.info("Downloading scrcpy from %s", url)
+    urllib.request.urlretrieve(url, zip_path, reporthook=_hook)
+
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(dest)
+    zip_path.unlink(missing_ok=True)
+
+    found = find_scrcpy()
+    if not found:
+        raise RuntimeError(f"scrcpy unpacked to {dest} but the executable was not found.")
+    return Path(found).parent
+
+
 def download_platform_tools(dest: str | os.PathLike | None = None, progress=None) -> Path:
     """Fetch Google's platform-tools zip and unpack it.
 

@@ -22,7 +22,13 @@ from PySide6.QtWidgets import (
 )
 
 from ptransfer.devices import Device
-from ptransfer.screen import PhoneScreen, ScreenUnavailable, map_to_device, scrcpy_path
+from ptransfer.screen import (
+    SECURE_SCREEN_HINT,
+    PhoneScreen,
+    ScreenUnavailable,
+    map_to_device,
+    scrcpy_path,
+)
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +67,26 @@ class FrameStreamer(QThread):
         self._running = False
 
 
+def is_mostly_black(image: QImage, samples: int = 24, threshold: int = 12) -> bool:
+    """Is this frame effectively blank?
+
+    Android returns an all-black screenshot for a secure surface rather than
+    refusing outright, so a black frame is the only signal that the lock screen
+    keypad is up. Sampled on a grid - reading every pixel of a 1440p frame
+    several times a second would be wasteful.
+    """
+    if image.isNull() or image.width() < 2 or image.height() < 2:
+        return False
+    step_x = max(1, image.width() // samples)
+    step_y = max(1, image.height() // samples)
+    for y in range(0, image.height(), step_y):
+        for x in range(0, image.width(), step_x):
+            colour = image.pixelColor(x, y)
+            if colour.red() > threshold or colour.green() > threshold or colour.blue() > threshold:
+                return False
+    return True
+
+
 class ScreenView(QLabel):
     """The image itself. Turns mouse gestures into taps and swipes."""
 
@@ -77,6 +103,7 @@ class ScreenView(QLabel):
         self.setStyleSheet("background: #111; color: #999;")
         self.setText("Not connected")
         self.device_size = (0, 0)
+        self.blank = False  # last frame came back entirely black (secure screen)
         self._press: QPoint | None = None
         self._pixmap_rect = (0, 0, 0, 0)  # x, y, w, h of the image inside the label
 
@@ -84,6 +111,7 @@ class ScreenView(QLabel):
         image = QImage.fromData(png, "PNG")
         if image.isNull():
             return
+        self.blank = is_mostly_black(image)
         self.device_size = (width or image.width(), height or image.height())
         pixmap = QPixmap.fromImage(image).scaled(
             self.size(),
@@ -163,16 +191,31 @@ class ScreenPage(QWidget):
 
         self.scrcpy_button = QPushButton("Open in scrcpy")
         self.scrcpy_button.setToolTip(
-            "scrcpy mirrors at full frame rate. Only available when it is installed."
+            "scrcpy mirrors the display itself, so it is smoother and it can show the lock "
+            "screen, which a screenshot cannot."
         )
-        self.scrcpy_button.setEnabled(scrcpy_path() is not None)
         top.addWidget(self.scrcpy_button)
+
+        self.get_scrcpy_button = QPushButton("Get scrcpy")
+        self.get_scrcpy_button.setToolTip("Download scrcpy (about 30 MB) so the lock screen can be seen.")
+        top.addWidget(self.get_scrcpy_button)
+        self.refresh_scrcpy_state()
 
         save = QPushButton("Save screenshot…")
         save.clicked.connect(self._save_shot)
         top.addWidget(save)
         top.addStretch(1)
         layout.addLayout(top)
+
+        # Shown only when the phone returns a black frame, which is the one
+        # case where the mirror looks broken but is working correctly.
+        self.secure_notice = QLabel(SECURE_SCREEN_HINT)
+        self.secure_notice.setWordWrap(True)
+        self.secure_notice.setStyleSheet(
+            "background:#3b2f00; color:#f0e0a0; padding:10px; border:1px solid #9a6700;"
+        )
+        self.secure_notice.setVisible(False)
+        layout.addWidget(self.secure_notice)
 
         self.view = ScreenView()
         self.view.tapped.connect(self.tap_requested.emit)
@@ -298,6 +341,14 @@ class ScreenPage(QWidget):
     # --- feedback -------------------------------------------------------
     def show_frame(self, png: bytes, width: int, height: int) -> None:
         self.view.show_frame(png, width, height)
+        self.secure_notice.setVisible(self.view.blank)
+        if self.view.blank:
+            self.passcode.setFocus()
+
+    def refresh_scrcpy_state(self) -> None:
+        installed = scrcpy_path() is not None
+        self.scrcpy_button.setEnabled(installed)
+        self.get_scrcpy_button.setVisible(not installed)
 
     def show_error(self, message: str) -> None:
         self.status.setText(f"<span style='color:#cf222e'>{message}</span>")
