@@ -204,3 +204,40 @@ def parse_lsusb(text: str) -> list[UsbDevice]:
 def interesting(devices: list[UsbDevice]) -> list[UsbDevice]:
     """Devices that look like a phone in some mode we recognise."""
     return [d for d in devices if d.mode() is not None]
+
+
+# Vendor IDs that belong to phone makers. Deliberately separate from
+# KNOWN_MODES: those identify a *rescue mode* and drive the repair advice,
+# whereas this only answers "is a phone plugged in at all" - which is what
+# distinguishes 'USB debugging is off' from 'nothing is connected'. A vendor ID
+# alone is weaker evidence (Samsung also make monitors), so it is not allowed
+# to influence the rescue plan.
+PHONE_VENDORS = {
+    "04e8": "samsung",
+    "2e04": "nokia",
+    "0421": "nokia",
+    "0fce": "sony",
+    "18d1": "google",
+    "2717": "xiaomi",
+    "2a70": "oneplus",
+    "22d9": "oppo",
+    "2d95": "vivo",
+    "22b8": "motorola",
+    "12d1": "huawei",
+    "1004": "lg",
+    "0bb4": "htc",
+    "0b05": "asus",
+    "19d2": "zte",
+    "17ef": "lenovo",
+    "1bbb": "tcl",
+    "2916": "android",
+}
+
+
+def phones_on_usb(devices: list[UsbDevice]) -> list[UsbDevice]:
+    """Anything that is plausibly a phone, by vendor or by known mode."""
+    return [d for d in devices if d.mode() is not None or d.vid.lower() in PHONE_VENDORS]
+
+
+def vendor_of(device: UsbDevice) -> str:
+    return PHONE_VENDORS.get(device.vid.lower(), "")

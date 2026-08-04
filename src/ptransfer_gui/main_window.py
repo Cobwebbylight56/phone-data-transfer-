@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from ptransfer import __version__
+from ptransfer.authorize import Authorizer
 from ptransfer.backup import BackupEngine, BackupOptions
 from ptransfer.devices import Device, DeviceManager
 from ptransfer.logging_setup import log_file
@@ -100,6 +101,7 @@ class MainWindow(QMainWindow):
     # --- wiring -------------------------------------------------------
     def _connect(self) -> None:
         self.devices_page.rescan_requested.connect(self.rescan)
+        self.devices_page.authorize_requested.connect(self.ask_for_permission)
         self.devices_page.device_selected.connect(self._device_selected)
 
         self.backup_page.start_requested.connect(self.start_backup)
@@ -316,6 +318,26 @@ class MainWindow(QMainWindow):
     def _mirroring_failed(self, message: str) -> None:
         self.stop_mirroring()
         self.screen_page.show_error(message)
+
+    def ask_for_permission(self) -> None:
+        """Trigger the phone's 'Allow USB debugging?' prompt and wait for it."""
+
+        def work(reporter: Reporter, cancel):
+            auth = Authorizer(self.manager, reporter, cancel)
+            situation = auth.situation()
+            if situation.ready or not situation.can_prompt:
+                # Nothing to trigger: either it is already fine, or debugging
+                # is off and only the phone's own menus can change that.
+                return situation.as_text()
+            return auth.request().message
+
+        def done(message: str) -> None:
+            self.statusBar().showMessage(message.splitlines()[0][:120])
+            QMessageBox.information(self, "USB debugging", message)
+            self.rescan()
+
+        self.statusBar().showMessage("Asking the phone…")
+        self._run(work, done)
 
     def install_scrcpy(self) -> None:
         """Download scrcpy - the only way to see a secure screen like the keypad."""

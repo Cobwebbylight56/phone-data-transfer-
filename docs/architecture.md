@@ -19,6 +19,7 @@ ptransfer/               the engine - pure stdlib, no Qt, importable and testabl
     backup.py            phone  -> bundle
     restore.py           bundle -> phone
     recovery.py          diagnosis + rescue actions
+    authorize.py         triggers the phone's 'Allow USB debugging?' prompt
     nokia.py             Nokia rescue: A/B slots, log analysis, on-device OTA, boot-loop repair
     screen.py            screen capture + remote input (tap/swipe/type/unlock)
     menu.py              the stock recovery menu, annotated with what each option costs
@@ -85,7 +86,7 @@ verification pass, and `test_missing_files_are_reported_as_partial` proves the p
 making a file genuinely unpullable rather than mocking the outcome.
 
 ```bash
-python -m pytest            # 201 tests, no hardware, no display
+python -m pytest            # 222 tests, no hardware, no display
 ```
 
 GUI tests run under `QT_QPA_PLATFORM=offscreen` and skip if PySide6 is absent. They build real

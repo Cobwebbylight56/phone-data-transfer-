@@ -43,6 +43,7 @@ STATE_HELP = {
 class DevicesPage(QWidget):
     device_selected = Signal(object)
     rescan_requested = Signal()
+    authorize_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -68,6 +69,14 @@ class DevicesPage(QWidget):
         self.scan_button = QPushButton("Scan for phones")
         self.scan_button.clicked.connect(self.rescan_requested.emit)
         row.addWidget(self.scan_button)
+
+        self.authorize_button = QPushButton("Ask the phone for permission")
+        self.authorize_button.setToolTip(
+            "Makes the phone show its 'Allow USB debugging?' prompt, then waits for you to tap "
+            "Allow. Use this when the phone shows as unauthorized."
+        )
+        self.authorize_button.clicked.connect(self.authorize_requested.emit)
+        row.addWidget(self.authorize_button)
         row.addStretch(1)
         layout.addLayout(row)
 

@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .authorize import Authorizer
 from .backup import SECTIONS, BackupEngine, BackupOptions
 from .devices import Device, DeviceManager, State
 from .logging_setup import setup_logging
@@ -125,6 +126,12 @@ def build_parser() -> argparse.ArgumentParser:
     rescue.add_argument("--menu", action="store_true",
                         help="explain the recovery menu on the phone's screen and what each option costs")
 
+    au = sub.add_parser("authorize", aliases=["debug"],
+                        help="make the phone show its 'Allow USB debugging?' prompt")
+    au.add_argument("--check", action="store_true", help="only report the situation, ask for nothing")
+    au.add_argument("--brand", default="", help="tailor the on-phone steps, e.g. samsung or nokia")
+    au.add_argument("--timeout", type=float, default=120.0, help="seconds to wait for you to tap Allow")
+
     sc = sub.add_parser("screen", help="see the phone's screen and control it from here")
     sc.add_argument("--shot", metavar="FILE", help="save one screenshot and exit")
     sc.add_argument("--tap", nargs=2, type=int, metavar=("X", "Y"), help="tap a point")
@@ -194,6 +201,8 @@ def main(argv: list[str] | None = None) -> int:
         "reboot": cmd_reboot,
         "nokia": cmd_nokia,
         "screen": cmd_screen,
+        "authorize": cmd_authorize,
+        "debug": cmd_authorize,
     }
     try:
         return handlers[args.command](args, manager)
@@ -382,6 +391,28 @@ def cmd_rescue(args, manager: DeviceManager) -> int:
         _line("")
         _line(engine.sideload(result.device, args.sideload))
     return 0
+
+
+def cmd_authorize(args, manager: DeviceManager) -> int:
+    auth = Authorizer(manager, Reporter(console_sink(args.verbose)), Cancel())
+
+    situation = auth.situation(args.brand)
+    _line(situation.as_text())
+
+    if situation.ready:
+        return 0
+    if args.check:
+        return 1
+
+    if not situation.can_prompt:
+        # Nothing to trigger - the steps above are the whole answer.
+        return 1
+
+    _line("")
+    result = auth.request(timeout=args.timeout, brand_hint=args.brand)
+    _line("")
+    _line(result.message)
+    return 0 if result.authorised else 1
 
 
 def cmd_screen(args, manager: DeviceManager) -> int:

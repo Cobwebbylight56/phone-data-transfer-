@@ -311,6 +311,29 @@ Everything the window does is available here, so it can be scripted.
 
 ## Turning on USB debugging
 
+Let the app walk you through it:
+
+```powershell
+ptransfer authorize            # or: ptransfer debug
+ptransfer authorize --check    # just tell me what's wrong, change nothing
+```
+
+In the window there's an **Ask the phone for permission** button on the Phones tab.
+
+It first works out *which* of two look-alike problems you have, because they need
+opposite advice:
+
+- **Phone shows as `unauthorized`** — debugging is on, this PC just isn't trusted yet.
+  The app restarts the adb daemon, which is what actually makes the phone ask again
+  (a daemon that was already refused won't re-prompt), then waits for you to tap Allow
+  and confirms when it worked.
+- **adb sees nothing but Windows sees the phone** — debugging is off. No program on a PC
+  can switch it on; it lives behind developer options by design. The app gives the exact
+  menu path **for your brand** (Samsung's route goes via *Software information*, most
+  others don't).
+
+Manually, if you prefer:
+
 Settings → About phone → tap **Build number** seven times → back → System → Developer
 options → **USB debugging** on. Plug in, then tap **Allow** on the phone.
 
