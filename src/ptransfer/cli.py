@@ -19,14 +19,15 @@ from .devices import Device, DeviceManager, State
 from .logging_setup import setup_logging
 from .manifest import Bundle, safe_bundle_name
 from .menu import as_text as menu_as_text
+from .mirror import ScrcpySession, choose_backend, explain_failure
 from .nokia import OTA_SEARCH_DIRS, NokiaRescue, is_nokia
 from .oem import ALL_PROFILES, profile_for
-from .platform_tools import download_platform_tools, discover, user_data_dir
+from .platform_tools import discover, download_platform_tools, download_scrcpy, user_data_dir
 from .proc import Cancel, ToolError
 from .progress import Event, Reporter, human_bytes
 from .recovery import RescueEngine, diagnose
 from .restore import RestoreEngine, RestoreOptions
-from .screen import PhoneScreen, ScreenUnavailable
+from .screen import PhoneScreen, ScreenUnavailable, scrcpy_path
 
 log = logging.getLogger(__name__)
 
@@ -140,6 +141,8 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--text", help="type text on the phone")
     sc.add_argument("--unlock", action="store_true",
                     help="wake, dismiss the lock screen and enter a passcode (prompted, not echoed)")
+    sc.add_argument("--mirror", action="store_true",
+                    help="open the live mirror (scrcpy), installing it first if needed")
 
     n = sub.add_parser("nokia", help="Nokia-specific rescue: slot switching, log analysis, on-device OTA")
     n.add_argument("--switch-slot", nargs="?", const="", metavar="A|B",
@@ -435,6 +438,34 @@ def cmd_screen(args, manager: DeviceManager) -> int:
             return 1
         Path(args.shot).write_bytes(frame.png)
         _line(f"Saved {args.shot} ({frame.width}x{frame.height})")
+        return 0
+
+    if args.mirror:
+        plan = choose_backend()
+        if plan.needs_download:
+            _line("Installing scrcpy (about 30 MB, one time only) ...")
+            try:
+                download_scrcpy(progress=lambda f: sys.stdout.write(f"\r  {f * 100:5.1f}%") if sys.stdout.isatty() else None)
+            except Exception as exc:
+                _line(f"\nCould not install scrcpy: {exc}")
+                return 2
+            _line("")
+        path = scrcpy_path()
+        if not path:
+            _line("scrcpy is not available on this system.")
+            return 2
+        session = ScrcpySession(
+            path=path, serial=device.serial or None, borderless=False, tools=manager.tools
+        )
+        if not session.start():
+            _line(session.error)
+            return 2
+        _line("Live mirror open. Close its window to stop.")
+        if session.process is not None:
+            session.process.wait()
+        output = session.read_output()
+        if output:
+            _line(explain_failure(output))
         return 0
 
     did_something = False

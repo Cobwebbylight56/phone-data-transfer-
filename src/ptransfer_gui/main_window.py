@@ -25,6 +25,7 @@ from ptransfer.authorize import Authorizer
 from ptransfer.backup import BackupEngine, BackupOptions
 from ptransfer.devices import Device, DeviceManager
 from ptransfer.logging_setup import log_file
+from ptransfer.mirror import ScrcpySession, choose_backend, explain_failure
 from ptransfer.nokia import NokiaRescue
 from ptransfer.platform_tools import discover, download_platform_tools, download_scrcpy
 from ptransfer.progress import Event, Reporter
@@ -60,6 +61,7 @@ class MainWindow(QMainWindow):
         self._ready = False
         self.phone_screen: PhoneScreen | None = None
         self.streamer: FrameStreamer | None = None
+        self.scrcpy: ScrcpySession | None = None
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -292,26 +294,106 @@ class MainWindow(QMainWindow):
 
     # --- screen mirroring ---------------------------------------------
     def start_mirroring(self, device: Device) -> None:
+        """Mirror the phone - scrcpy by default, screenshots only as a fallback."""
         try:
             PhoneScreen.check_supported(device)
         except ScreenUnavailable as exc:
             self.screen_page.show_error(str(exc))
             return
 
+        # Always keep a PhoneScreen around: the unlock box and the phone
+        # buttons use it whichever backend is drawing the picture.
         self.phone_screen = PhoneScreen(self.manager.adb, device.serial or None)
+
+        plan = choose_backend()
+        if plan.needs_download:
+            self.screen_page.show_status("Downloading scrcpy (about 30 MB) - one time only…")
+            self._run(
+                lambda reporter, cancel: str(download_scrcpy(progress=lambda f: reporter.progress(f, "downloading scrcpy"))),
+                lambda _where: self._start_scrcpy(device),
+                page=self.screen_page,
+            )
+            return
+
+        if plan.is_scrcpy:
+            self._start_scrcpy(device)
+            return
+
+        self.screen_page.show_status(plan.reason)
+        self._start_screenshot_mirror(device)
+
+    def _start_scrcpy(self, device: Device) -> None:
+        self.screen_page.refresh_scrcpy_state()
+        path = scrcpy_path()
+        if not path:
+            self.screen_page.show_error("scrcpy is still not available; using screenshots instead.")
+            self._start_screenshot_mirror(device)
+            return
+
+        self.scrcpy = ScrcpySession(
+            path=path,
+            serial=device.serial or None,
+            borderless=True,
+            tools=self.manager.tools,
+        )
+        if not self.scrcpy.start():
+            self.screen_page.show_error(self.scrcpy.error)
+            self._start_screenshot_mirror(device)
+            return
+
+        self.screen_page.set_streaming(True)
+        self.screen_page.show_status("Starting the live mirror…")
+
+        def wait(reporter: Reporter, cancel):
+            return self.scrcpy.wait_for_window(timeout=25)
+
+        def done(hwnd: int) -> None:
+            if not hwnd:
+                # scrcpy died, or this is not Windows: say why, keep whatever
+                # window it managed to open, and fall back if it is gone.
+                message = explain_failure(self.scrcpy.error or self.scrcpy.read_output())
+                if self.scrcpy.running:
+                    self.screen_page.show_status(
+                        "scrcpy is running in its own window - it could not be embedded here, "
+                        "but it works the same."
+                    )
+                    return
+                self.screen_page.show_error(f"{message}\n\nFalling back to screenshots.")
+                self.scrcpy.stop()
+                self._start_screenshot_mirror(device)
+                return
+
+            if self.screen_page.embed(hwnd):
+                self.screen_page.show_status(
+                    "Live mirror. The lock screen shows here too - click and type straight into it."
+                )
+            else:
+                self.screen_page.show_status("scrcpy is running in its own window.")
+
+        self._run(wait, done)
+
+    def _start_screenshot_mirror(self, device: Device) -> None:
         interval = 150 if self.screen_page.smooth_check.isChecked() else 400
         self.streamer = FrameStreamer(self.phone_screen, interval)
         self.streamer.frame.connect(self.screen_page.show_frame)
         self.streamer.failed.connect(self._mirroring_failed)
         self.streamer.start()
         self.screen_page.set_streaming(True)
-        self.screen_page.show_status("Mirroring. Click to tap, drag to swipe, type to send keys.")
+        self.screen_page.show_status(
+            "Mirroring with screenshots. Click to tap, drag to swipe, type to send keys."
+        )
 
     def stop_mirroring(self) -> None:
         if self.streamer is not None:
             self.streamer.stop()
             self.streamer.wait(2000)
             self.streamer = None
+        if self.scrcpy is not None:
+            # Detach the embedded window before killing the process that owns
+            # it, or Qt is left holding a destroyed native window.
+            self.screen_page.clear_embedded()
+            self.scrcpy.stop()
+            self.scrcpy = None
         self.screen_page.set_streaming(False)
         self.screen_page.show_status("Stopped.")
 
@@ -464,7 +546,7 @@ class MainWindow(QMainWindow):
 
     # --- window -------------------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        if self.streamer is not None:
+        if self.streamer is not None or self.scrcpy is not None:
             self.stop_mirroring()
         if self.current_job is not None:
             answer = QMessageBox.question(

@@ -87,6 +87,28 @@ def is_mostly_black(image: QImage, samples: int = 24, threshold: int = 12) -> bo
     return True
 
 
+def embed_foreign_window(hwnd: int, parent: QWidget):
+    """Adopt scrcpy's window into our own so there is one window, not two.
+
+    Best-effort by nature - it reaches into the Windows API. Any failure just
+    means scrcpy keeps its own window, which still works, so this never raises.
+    """
+    if not hwnd:
+        return None
+    try:
+        from PySide6.QtGui import QWindow
+
+        foreign = QWindow.fromWinId(hwnd)
+        if foreign is None:
+            return None
+        container = QWidget.createWindowContainer(foreign, parent)
+        container.setMinimumSize(300, 400)
+        return container
+    except Exception:  # pragma: no cover - platform dependent
+        log.exception("could not embed the scrcpy window")
+        return None
+
+
 class ScreenView(QLabel):
     """The image itself. Turns mouse gestures into taps and swipes."""
 
@@ -167,6 +189,7 @@ class ScreenPage(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.device: Device | None = None
+        self.embedded: QWidget | None = None
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<h2>Phone screen</h2>"))
@@ -186,6 +209,7 @@ class ScreenPage(QWidget):
         top.addWidget(self.connect_button)
 
         self.smooth_check = QCheckBox("Smoother (0.15s refresh, more USB traffic)")
+        self.smooth_check.setToolTip("Only used by the screenshot fallback; scrcpy is always full speed.")
         self.smooth_check.setChecked(False)
         top.addWidget(self.smooth_check)
 
@@ -341,14 +365,40 @@ class ScreenPage(QWidget):
     # --- feedback -------------------------------------------------------
     def show_frame(self, png: bytes, width: int, height: int) -> None:
         self.view.show_frame(png, width, height)
-        self.secure_notice.setVisible(self.view.blank)
-        if self.view.blank:
+        # The secure-screen notice only matters on the screenshot fallback;
+        # scrcpy shows the lock screen for real.
+        self.secure_notice.setVisible(self.view.blank and self.embedded is None)
+        if self.view.blank and self.embedded is None:
             self.passcode.setFocus()
 
     def refresh_scrcpy_state(self) -> None:
         installed = scrcpy_path() is not None
         self.scrcpy_button.setEnabled(installed)
         self.get_scrcpy_button.setVisible(not installed)
+
+    # --- the embedded scrcpy view -------------------------------------
+    def embed(self, hwnd: int) -> bool:
+        """Swap the screenshot view for scrcpy's own window."""
+        container = embed_foreign_window(hwnd, self)
+        if container is None:
+            return False
+        self.clear_embedded()
+        self.view.hide()
+        self.secure_notice.setVisible(False)
+        self.layout().insertWidget(self.layout().indexOf(self.view), container, 1)
+        self.embedded = container
+        self.hint.setText(
+            "Live mirror through scrcpy. The lock screen shows here, and your mouse and keyboard "
+            "go straight to the phone."
+        )
+        return True
+
+    def clear_embedded(self) -> None:
+        if self.embedded is not None:
+            self.embedded.setParent(None)
+            self.embedded.deleteLater()
+            self.embedded = None
+        self.view.show()
 
     def show_error(self, message: str) -> None:
         self.status.setText(f"<span style='color:#cf222e'>{message}</span>")

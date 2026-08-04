@@ -45,6 +45,13 @@ jobs:
         run: |
           python -c "from ptransfer.platform_tools import download_platform_tools; print(download_platform_tools('build-tools'))"
 
+      # scrcpy is the mirroring engine, so shipping it means mirroring works
+      # the moment the app opens, with nothing to download.
+      - name: Fetch scrcpy to bundle
+        continue-on-error: true
+        run: |
+          python -c "from ptransfer.platform_tools import download_scrcpy; print(download_scrcpy('build-tools/scrcpy'))"
+
       - name: Build the app
         shell: pwsh
         run: |
@@ -60,6 +67,13 @@ jobs:
             $args += @("--add-data", "build-tools/platform-tools;platform-tools")
           } else {
             Write-Warning "platform-tools not fetched; the app will download them on first run."
+          }
+          $scrcpy = Get-ChildItem -Path "build-tools/scrcpy" -Filter "scrcpy.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($scrcpy) {
+            Write-Host "Bundling scrcpy from $($scrcpy.DirectoryName)"
+            $args += @("--add-data", "$($scrcpy.DirectoryName);scrcpy")
+          } else {
+            Write-Warning "scrcpy not fetched; the app will download it on first use."
           }
           $args += "src/ptransfer_gui/app.py"
           python -m PyInstaller @args

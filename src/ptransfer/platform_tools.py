@@ -66,12 +66,30 @@ class Tools:
         return bool(self.adb) and bool(self.fastboot)
 
 
+def bundle_dir() -> Path | None:
+    """Where PyInstaller unpacked bundled data.
+
+    PyInstaller 6 puts --add-data under ``_internal/`` rather than beside the
+    executable, so searching only next to the .exe misses everything we ship.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:  # pragma: no cover - only set in a frozen build
+        return Path(meipass)
+    internal = app_dir() / "_internal"
+    return internal if internal.is_dir() else None
+
+
 def _candidate_dirs() -> list[Path]:
-    return [
+    dirs = [
         app_dir() / "platform-tools",
         app_dir(),
         user_data_dir() / "platform-tools",
     ]
+    bundled = bundle_dir()
+    if bundled is not None:
+        dirs.insert(0, bundled / "platform-tools")
+        dirs.insert(1, bundled)
+    return dirs
 
 
 def find_tool(name: str, env_var: str) -> tuple[str | None, str]:
@@ -110,7 +128,9 @@ def find_scrcpy() -> str | None:
     if override and Path(override).exists():
         return override
 
-    for base in (*_candidate_dirs(), user_data_dir() / "scrcpy"):
+    bundled = bundle_dir()
+    extra = [bundled / "scrcpy"] if bundled is not None else []
+    for base in (*extra, *_candidate_dirs(), user_data_dir() / "scrcpy"):
         direct = base / exe("scrcpy")
         if direct.exists():
             return str(direct)

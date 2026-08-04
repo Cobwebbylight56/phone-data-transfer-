@@ -242,33 +242,40 @@ ptransfer guide nokia   # works with no phone attached
 5. **Rescue** — for a phone that will not start.
 6. **Brand guides** — button combinations and vendor tools per brand.
 
-### Screen mirroring and typing
+### Screen mirroring — the PC as the controller
 
-The Screen tab shows the phone's display and lets you drive it from the PC:
+Press **Start mirroring** on the Screen tab. That's it.
 
-- **Click to tap, drag to swipe**, type on your keyboard to send keystrokes
-- **Phone buttons** — Back, Home, Recents, Power, Volume, Wake
-- **Unlock** — wakes the phone, dismisses the lock screen and enters your PIN or password
-- **Save screenshot**, and an **Open in scrcpy** button when scrcpy is installed (much
-  smoother; the built-in view refreshes a few times a second)
+Mirroring runs on **scrcpy**, which captures the phone's display directly, so:
+
+- **the lock screen shows** — you can see the keypad and type your PIN into it
+- full frame rate and low latency, not a slideshow
+- mouse and keyboard go straight through, including modifier keys
+
+scrcpy ships inside the app, so there's nothing to install. (If a build ever lacks it, the
+app downloads it the first time you press Start mirroring — no button to hunt for.) Its window
+is embedded inside this app so you get one window, not two.
+
+If scrcpy can't run at all, the app falls back to a screenshot loop and says so. That fallback
+is slower and Android returns a **black rectangle for the lock screen**, because a screenshot
+of a secure surface is blocked — the app explains that when it happens and lets you type the
+PIN blind, which still works.
+
+From the command line:
 
 ```powershell
-ptransfer screen --shot screen.png
+ptransfer screen --mirror        # live mirror in its own window
+ptransfer screen --shot s.png    # one screenshot
 ptransfer screen --tap 540 1200
 ptransfer screen --text "hello"
-ptransfer screen --unlock          # prompts for the passcode, never echoes it
+ptransfer screen --unlock        # prompts for the passcode, never echoes it
 ```
 
-Two honest limits:
-
-**The passcode field is not a lock-screen bypass.** It only works on a phone that has already
-authorised this computer for USB debugging — and granting that requires physically unlocking
-the phone and accepting the prompt. It's a convenience for a phone you've already unlocked
-once. Nothing in the app tries more than one passcode, by design.
-
-**A bricked phone has no screen to mirror.** Both capture and input need Android itself
-running. A phone in recovery or fastboot has neither, so mirroring is unavailable there — the
-app says so and points you at the recovery menu helper instead.
+**The one hard requirement:** the phone must have USB debugging on and have trusted this PC.
+That's an Android security control — it's what stops anyone with a cable reading a phone that
+isn't theirs, and no tool bypasses it. `ptransfer authorize` gets you through it as fast as
+possible (see below). If the screen is dead *and* debugging was never enabled, mirroring isn't
+available to any software; a USB-C hub with a mouse plugged into the phone is the usual route.
 
 ### The recovery menu helper
 
