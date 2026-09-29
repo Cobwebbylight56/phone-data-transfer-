@@ -32,6 +32,7 @@ from ptransfer.progress import Event, Reporter
 from ptransfer.recovery import RescueEngine, diagnose
 from ptransfer.restore import RestoreEngine, RestoreOptions
 from ptransfer.screen import PhoneScreen, ScreenUnavailable, scrcpy_path
+from ptransfer.unlock import UnlockFlow
 from ptransfer.transfer import TransferEngine, TransferOptions
 
 from .pages.backup_page import BackupPage
@@ -137,6 +138,7 @@ class MainWindow(QMainWindow):
         self.screen_page.key_requested.connect(lambda k: self._screen_do(lambda s: s.key(k)))
         self.screen_page.text_requested.connect(lambda t: self._screen_do(lambda s: s.type_text(t)))
         self.screen_page.unlock_requested.connect(self.do_unlock)
+        self.screen_page.wait_unlock_requested.connect(self.guided_unlock_and_mirror)
         self.screen_page.scrcpy_button.clicked.connect(self.launch_scrcpy)
         self.screen_page.get_scrcpy_button.clicked.connect(self.install_scrcpy)
 
@@ -530,6 +532,45 @@ class MainWindow(QMainWindow):
             lambda: self.phone_screen.unlock(credential, numeric),
             self.screen_page.show_status,
         )
+
+    def guided_unlock_and_mirror(self, credential: str, numeric: bool, then_mirror: bool) -> None:
+        """The blank-screen flow: wait for the phone, unlock it, open the mirror.
+
+        This does not need mirroring to be running first - it drives the phone
+        over adb directly, which is the whole point for a screen you cannot see.
+        """
+        device = self.selected or self.screen_page.device
+        if device is None:
+            self.screen_page.show_error("Pick a phone on the Phones tab first.")
+            return
+
+        serial = device.serial or None
+
+        def work(reporter: Reporter, cancel):
+            flow = UnlockFlow(self.manager, serial, reporter, cancel)
+            return flow.wait_unlock_and_prepare(credential, numeric, timeout=300)
+
+        def done(result) -> None:
+            self.screen_page.show_status(result.message)
+            if then_mirror and result.can_mirror:
+                self.screen_page.show_status(result.message + "  Opening the mirror…")
+                # Re-fetch the device: it may have only just come online.
+                fresh = self._device_by_serial(serial) or device
+                self.start_mirroring(fresh)
+
+        self.screen_page.show_status("Waiting for the phone…")
+        self._run(work, done, page=self.screen_page)
+
+    def _device_by_serial(self, serial: str | None) -> Device | None:
+        if not serial:
+            return None
+        try:
+            for d in self.manager.scan(deep=False):
+                if d.serial == serial:
+                    return d
+        except Exception:
+            pass
+        return None
 
     def run_nokia_action(self, device: Device, action: str) -> None:
         def work(reporter: Reporter, cancel):

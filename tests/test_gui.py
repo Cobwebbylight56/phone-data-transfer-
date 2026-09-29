@@ -493,3 +493,84 @@ def test_main_window_has_the_transfer_page(app, monkeypatch):
     window.transfer_page.set_devices(_two())
     assert window.transfer_page.start_button.isEnabled()
     window.close()
+
+
+# --- blank-screen unlock + auto-mirror ---------------------------------
+def test_screen_page_emits_wait_unlock_with_the_pin_and_mirror_choice(app):
+    from ptransfer_gui.pages.screen_page import ScreenPage
+
+    page = ScreenPage()
+    page.auto_mirror_check.setChecked(True)
+    page.passcode.setText("1902")
+
+    got: list = []
+    page.wait_unlock_requested.connect(lambda c, n, m: got.append((c, n, m)))
+    page._wait_unlock_mirror()
+
+    assert got == [("1902", True, True)]
+    assert page.passcode.text() == ""  # cleared, never left on screen
+
+
+def test_auto_mirror_can_be_turned_off(app):
+    from ptransfer_gui.pages.screen_page import ScreenPage
+
+    page = ScreenPage()
+    page.auto_mirror_check.setChecked(False)
+    page.passcode.setText("hunter2")
+
+    got: list = []
+    page.wait_unlock_requested.connect(lambda c, n, m: got.append((c, n, m)))
+    page._wait_unlock_mirror()
+
+    assert got == [("hunter2", False, False)]  # alphanumeric -> not numeric
+
+
+def test_wait_unlock_flow_opens_the_mirror_when_it_can(app, monkeypatch):
+    monkeypatch.setattr("ptransfer.devices.enumerate_usb", lambda runner=None: [])
+    # The first-run tools dialog is modal and would hang a headless run.
+    monkeypatch.setattr("ptransfer_gui.main_window.MainWindow._first_run_check", lambda self: None)
+    from ptransfer_gui.main_window import MainWindow
+    from ptransfer.unlock import Readiness, UnlockResult
+
+    window = MainWindow()
+    window.selected = Device(serial="R58M", state=State.ONLINE, model="Nokia 8.3")
+    window.screen_page.set_device(window.selected)
+
+    # Stand in for the whole wait+unlock so the test is about the wiring.
+    monkeypatch.setattr(
+        "ptransfer_gui.main_window.UnlockFlow.wait_unlock_and_prepare",
+        lambda self, *a, **k: UnlockResult(True, Readiness.UNLOCKED, "Unlocked.", can_mirror=True),
+    )
+    mirrored: list = []
+    monkeypatch.setattr(window, "start_mirroring", lambda d: mirrored.append(d))
+
+    window.guided_unlock_and_mirror("1902", True, then_mirror=True)
+    window.pool.waitForDone(4000)
+    app.processEvents()
+
+    assert mirrored and mirrored[0].serial == "R58M"
+    window.close()
+
+
+def test_wait_unlock_flow_does_not_mirror_when_unauthorised(app, monkeypatch):
+    monkeypatch.setattr("ptransfer.devices.enumerate_usb", lambda runner=None: [])
+    monkeypatch.setattr("ptransfer_gui.main_window.MainWindow._first_run_check", lambda self: None)
+    from ptransfer_gui.main_window import MainWindow
+    from ptransfer.unlock import Readiness, UnlockResult
+
+    window = MainWindow()
+    window.selected = Device(serial="R58M", state=State.UNAUTHORIZED, model="Nokia 8.3")
+
+    monkeypatch.setattr(
+        "ptransfer_gui.main_window.UnlockFlow.wait_unlock_and_prepare",
+        lambda self, *a, **k: UnlockResult(False, Readiness.UNAUTHORIZED, "not trusted", can_mirror=False),
+    )
+    mirrored: list = []
+    monkeypatch.setattr(window, "start_mirroring", lambda d: mirrored.append(d))
+
+    window.guided_unlock_and_mirror("1902", True, then_mirror=True)
+    window.pool.waitForDone(4000)
+    app.processEvents()
+
+    assert mirrored == []
+    window.close()

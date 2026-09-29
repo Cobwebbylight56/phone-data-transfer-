@@ -183,6 +183,7 @@ class ScreenPage(QWidget):
     key_requested = Signal(str)
     text_requested = Signal(str)
     unlock_requested = Signal(str, bool)
+    wait_unlock_requested = Signal(str, bool, bool)  # credential, numeric, then-mirror
     start_requested = Signal(object)
     stop_requested = Signal()
 
@@ -263,21 +264,45 @@ class ScreenPage(QWidget):
             row.addWidget(b)
         layout.addWidget(buttons)
 
-        unlock_box = QGroupBox("Unlock and typing")
-        unlock_row = QHBoxLayout(unlock_box)
+        unlock_box = QGroupBox("Blank screen? Unlock and open the mirror")
+        unlock_outer = QVBoxLayout(unlock_box)
+
+        blank_hint = QLabel(
+            "For a phone whose screen is dead: type your PIN below and press <b>Wait, unlock &amp; "
+            "mirror</b>. The app waits for the phone to finish booting, tells you when it is ready, "
+            "sends your PIN, and opens the live mirror by itself."
+        )
+        blank_hint.setWordWrap(True)
+        blank_hint.setStyleSheet("color: #57606a;")
+        unlock_outer.addWidget(blank_hint)
+
+        unlock_row = QHBoxLayout()
         self.passcode = QLineEdit()
         self.passcode.setEchoMode(QLineEdit.EchoMode.Password)
         self.passcode.setPlaceholderText("PIN or password")
-        self.passcode.returnPressed.connect(self._unlock)
+        self.passcode.returnPressed.connect(self._wait_unlock_mirror)
         unlock_row.addWidget(self.passcode, 1)
 
-        unlock = QPushButton("Unlock phone")
+        self.wait_unlock_button = QPushButton("Wait, unlock && mirror")
+        self.wait_unlock_button.setToolTip(
+            "Wait for the phone to boot, send the PIN, and open the mirror automatically."
+        )
+        self.wait_unlock_button.clicked.connect(self._wait_unlock_mirror)
+        unlock_row.addWidget(self.wait_unlock_button)
+
+        unlock = QPushButton("Unlock only")
+        unlock.setToolTip("Send the PIN now, without waiting or opening the mirror.")
         unlock.clicked.connect(self._unlock)
         unlock_row.addWidget(unlock)
 
         type_button = QPushButton("Type text…")
         type_button.clicked.connect(self._type_text)
         unlock_row.addWidget(type_button)
+        unlock_outer.addLayout(unlock_row)
+
+        self.auto_mirror_check = QCheckBox("Open the mirror automatically once unlocked")
+        self.auto_mirror_check.setChecked(True)
+        unlock_outer.addWidget(self.auto_mirror_check)
         layout.addWidget(unlock_box)
 
         note = QLabel(
@@ -346,6 +371,11 @@ class ScreenPage(QWidget):
         code = self.passcode.text()
         self.passcode.clear()
         self.unlock_requested.emit(code, code.isdigit())
+
+    def _wait_unlock_mirror(self) -> None:
+        code = self.passcode.text()
+        self.passcode.clear()
+        self.wait_unlock_requested.emit(code, code.isdigit(), self.auto_mirror_check.isChecked())
 
     def _type_text(self) -> None:
         text, ok = QInputDialog.getText(self, "Type on the phone", "Text to send:")

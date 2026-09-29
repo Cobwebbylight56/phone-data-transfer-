@@ -29,6 +29,7 @@ from .recovery import RescueEngine, diagnose
 from .restore import RestoreEngine, RestoreOptions
 from .screen import PhoneScreen, ScreenUnavailable, scrcpy_path
 from .transfer import TransferEngine, TransferOptions, pick_pair
+from .unlock import NARRATION, Readiness, UnlockFlow
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="wake, dismiss the lock screen and enter a passcode (prompted, not echoed)")
     sc.add_argument("--mirror", action="store_true",
                     help="open the live mirror (scrcpy), installing it first if needed")
+    sc.add_argument("--wait-unlock-mirror", action="store_true",
+                    help="wait for the phone to boot, unlock it with a prompted PIN, then open the mirror")
 
     n = sub.add_parser("nokia", help="Nokia-specific rescue: slot switching, log analysis, on-device OTA")
     n.add_argument("--switch-slot", nargs="?", const="", metavar="A|B",
@@ -485,7 +488,62 @@ def cmd_authorize(args, manager: DeviceManager) -> int:
     return 0 if result.authorised else 1
 
 
+def _wait_unlock_mirror(args, manager: DeviceManager) -> int:
+    """Wait for the phone, unlock it with a prompted PIN, then open the mirror.
+
+    The whole flow for a blank-screen phone from the terminal.
+    """
+    flow = UnlockFlow(manager, args.serial, Reporter(console_sink(args.verbose)), Cancel())
+
+    _line("Waiting for the phone to boot. Plug it in and let it start.")
+    readiness = flow.wait_until_ready(timeout=600)
+    _line("")
+    _line(NARRATION[readiness])
+
+    if not readiness.ready_for_pin and readiness is not Readiness.UNLOCKED:
+        return 1
+
+    if readiness is Readiness.UNLOCKED:
+        _line("Phone is already unlocked.")
+    else:
+        # Prompted, so the PIN stays out of the shell history and process list.
+        code = getpass.getpass("PIN or password (not shown): ")
+        result = flow.wait_unlock_and_prepare(code, code.isdigit(), timeout=10)
+        _line(result.message)
+        if not result.can_mirror:
+            return 1
+
+    _line("")
+    _line("Opening the mirror…")
+    plan = choose_backend()
+    if plan.needs_download:
+        _line("Installing scrcpy (about 30 MB, one time only) ...")
+        try:
+            download_scrcpy()
+        except Exception as exc:
+            _line(f"Could not install scrcpy: {exc}")
+            return 2
+    path = scrcpy_path()
+    if not path:
+        _line("scrcpy is not available; run 'ptransfer screen --shot' for a still image instead.")
+        return 2
+    session = ScrcpySession(path=path, serial=args.serial, borderless=False, tools=manager.tools)
+    if not session.start():
+        _line(session.error)
+        return 2
+    _line("Live mirror open. Close its window to stop.")
+    if session.process is not None:
+        session.process.wait()
+    output = session.read_output()
+    if output:
+        _line(explain_failure(output))
+    return 0
+
+
 def cmd_screen(args, manager: DeviceManager) -> int:
+    if args.wait_unlock_mirror:
+        return _wait_unlock_mirror(args, manager)
+
     device = _select(manager, args.serial)
     if device is None:
         return 1

@@ -270,6 +270,25 @@ ptransfer guide nokia   # works with no phone attached
 5. **Rescue** — for a phone that will not start.
 6. **Brand guides** — button combinations and vendor tools per brand.
 
+
+#### Blank screen: wait, unlock, and open the mirror by itself
+
+For a phone whose screen is dead, the Screen tab has a one-press flow. Type your PIN, press
+**Wait, unlock & mirror**, and the app:
+
+1. waits for the phone to finish booting and **tells you when it is on and ready for the PIN**,
+2. sends the PIN **once** (digits go as key-codes, which the lock screen accepts),
+3. and opens the live mirror automatically, so a phone you cannot see is now on the PC.
+
+```powershell
+ptransfer screen --wait-unlock-mirror     # same flow from the terminal; prompts for the PIN
+```
+
+This drives your own phone over the debugging channel you already authorised. It is **not** a
+lock-screen bypass: the channel only exists because the phone was unlocked once, by hand, to
+trust this PC, and the PIN is tried a single time — nothing guesses. If the phone will not say
+whether it unlocked, the app says so rather than pretending.
+
 ### Screen mirroring — the PC as the controller
 
 Press **Start mirroring** on the Screen tab. That's it.
