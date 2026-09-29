@@ -1,12 +1,13 @@
 name: build-windows
 
-# Builds the Windows app so it can be downloaded without installing Python.
+# Builds the Windows app and publishes it as a GitHub Release, so downloading
+# is one click with no login and no digging through the Actions tab:
 #
-# After a push, open the repo's Actions tab, click the newest run of this
-# workflow, and download "PhoneDataTransfer-windows" from the Artifacts
-# section at the bottom. Unzip it and run PhoneDataTransfer.exe.
+#     https://github.com/<owner>/<repo>/releases/latest
 #
-# Tagging a commit "v1.2.3" also attaches the zip to a GitHub Release.
+# Every build gets a unique, increasing version (0.1.<run number>), so two
+# downloads never clash: each is its own release, its own zip name, and its
+# own folder when unzipped.
 
 on:
   push:
@@ -26,6 +27,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      # One unique, increasing version per build. run_number only ever goes up,
+      # so no two builds share a version and nothing overwrites anything.
+      - name: Work out the version
+        id: ver
+        shell: pwsh
+        run: |
+          $short = "${{ github.sha }}".Substring(0,7)
+          $version = "0.1.${{ github.run_number }}"
+          "version=$version"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=v$version"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "full=$version+$short"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "folder=PhoneDataTransfer-v$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Building version $version+$short"
+
+      # Stamp the version into the app so the title bar and `--version` show
+      # exactly which build this is.
+      - name: Stamp the build version
+        shell: pwsh
+        run: |
+          'VERSION = "${{ steps.ver.outputs.full }}"' | Out-File -FilePath src/ptransfer/_build.py -Encoding utf8
 
       - name: Install
         run: |
@@ -89,20 +111,21 @@ jobs:
       - name: Collect everything into one folder
         shell: pwsh
         run: |
-          $out = "PhoneDataTransfer-windows"
+          $out = "${{ steps.ver.outputs.folder }}"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item -Recurse dist/PhoneDataTransfer/* $out/
           Copy-Item dist/ptransfer.exe $out/
           Copy-Item README.md $out/
           Copy-Item docs/soft-brick-rescue.md $out/
+          "${{ steps.ver.outputs.full }}" | Out-File -FilePath "$out/VERSION.txt" -Encoding utf8
           @"
-          Phone Data Transfer
-          ===================
+          Phone Data Transfer - version ${{ steps.ver.outputs.full }}
+          =====================================================
 
           Double-click PhoneDataTransfer.exe to start.
 
-          adb and fastboot are already included in this folder - nothing else
-          to install.
+          adb, fastboot and scrcpy are already included in this folder -
+          nothing else to install.
 
           For the command line, open PowerShell in this folder and run:
               .\ptransfer.exe --help
@@ -111,26 +134,39 @@ jobs:
 
           If Windows SmartScreen warns that the publisher is unknown, that is
           because this build is not code-signed. Choose "More info" then
-          "Run anyway", or check the file yourself first.
+          "Run anyway".
+
+          This is version ${{ steps.ver.outputs.full }}. Newer builds live at:
+              https://github.com/${{ github.repository }}/releases/latest
 
           Read soft-brick-rescue.md before doing anything to a phone that will
           not start.
           "@ | Out-File -FilePath "$out/READ ME FIRST.txt" -Encoding utf8
 
-      - name: Upload the app
+      - name: Zip it
+        shell: pwsh
+        run: Compress-Archive -Path "${{ steps.ver.outputs.folder }}" -DestinationPath "${{ steps.ver.outputs.folder }}.zip"
+
+      # Kept as a fallback for anyone browsing the Actions tab.
+      - name: Upload the artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PhoneDataTransfer-windows
-          path: PhoneDataTransfer-windows/
+          name: ${{ steps.ver.outputs.folder }}
+          path: ${{ steps.ver.outputs.folder }}/
           retention-days: 30
 
-      - name: Zip for release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        run: Compress-Archive -Path PhoneDataTransfer-windows/* -DestinationPath PhoneDataTransfer-windows.zip
-
-      - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/v')
+      # The easy path: a real Release. 'latest' always points at the newest,
+      # and each release keeps its own version so nothing clashes.
+      - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
-          files: PhoneDataTransfer-windows.zip
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Phone Data Transfer ${{ steps.ver.outputs.version }}
+          body: |
+            **One-click download:** grab `${{ steps.ver.outputs.folder }}.zip` from **Assets** below, unzip it, and run **PhoneDataTransfer.exe**.
+
+            adb, fastboot and scrcpy are bundled — nothing else to install.
+
+            Version `${{ steps.ver.outputs.full }}`. Windows may warn that the publisher is unknown (the build is not code-signed): choose **More info → Run anyway**.
+          files: ${{ steps.ver.outputs.folder }}.zip
+          make_latest: true

@@ -192,21 +192,31 @@ What it does:
 Pick **one** of these. Option A needs nothing installed; option B is fastest if you already
 have Python.
 
-### A. Download the built app (no Python needed)
+### A. Download the built app (no Python needed) — the easy way
 
-Every push builds a Windows `.exe` automatically.
+**One link, always the newest build:**
 
-1. Go to the repo on GitHub → **Actions** tab
-2. Click the newest **build-windows** run (green tick = finished)
-3. Scroll to **Artifacts** at the bottom and download **PhoneDataTransfer-windows**
-4. Unzip it anywhere — Desktop is fine
-5. Double-click **PhoneDataTransfer.exe**
+> **https://github.com/Cobwebbylight56/phone-data-transfer-/releases/latest**
 
-`adb` and `fastboot` are already inside that folder, so there is nothing else to install.
+1. Open that link
+2. Under **Assets**, click **`PhoneDataTransfer-v0.1.NN.zip`** to download it
+3. Unzip it anywhere — Desktop is fine
+4. Double-click **PhoneDataTransfer.exe**
+
+That's it. No login, no Actions tab, no hunting. `adb`, `fastboot` and `scrcpy` are already
+inside the folder, so there's nothing else to install.
+
+**Every build has its own version number** (`0.1.1`, `0.1.2`, …), shown in the release title,
+in the zip name, in the folder it unzips to, and in the app's title bar. So new versions never
+overwrite or clash with old ones — you can keep several side by side and always know which is
+which. The **latest** link above always jumps to the newest.
 
 Windows will likely show a blue **"Windows protected your PC"** box, because the build isn't
 code-signed (signing certificates cost money). Click **More info** → **Run anyway**. If you'd
 rather not, use option B, which builds it on your own machine from source you can read.
+
+<sub>Prefer the raw files? The same zip is also attached to each run on the **Actions** tab, but
+the Releases link above is the simple route.</sub>
 
 ### B. Install from source (one click)
 

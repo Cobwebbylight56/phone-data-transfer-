@@ -17,3 +17,6 @@ venv/
 companion/.gradle/
 companion/local.properties
 companion/**/build/
+
+# Generated build stamp
+src/ptransfer/_build.py
